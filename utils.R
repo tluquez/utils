@@ -146,7 +146,13 @@ get_h5ad_expr <- function(h5ad, transpose = T, class = "H5SparseMatrix") {
   obs_attr <- rhdf5::h5readAttributes(h5ad, "obs")
   obs_i <- rhdf5::h5read(h5ad, paste0("obs/", obs_attr[["_index"]]))
   var_attr <- rhdf5::h5readAttributes(h5ad, "var")
-  var_i <- rhdf5::h5read(h5ad, paste0("var/", var_attr[["_index"]]))
+  # Keeping support for old versions of AnnData
+  if (length(var_attr[["_index"]]) > 1) {
+    var_i <- rhdf5::h5read(h5ad, paste0("var/", var_attr[["_index"]]))
+  } else {
+    var_i <- rhdf5::h5read(h5ad, "var/feature_name")
+    var_i <- var_i$categories[var_i$codes + 1]
+  }
   rhdf5::h5closeAll()
 
   # Import matrix
