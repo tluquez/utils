@@ -26,30 +26,86 @@ sink_all <- function(expr, output_file) {
 filter_cell_types <- function(data, grouping_vars, min_n, min_pct, covs_n,
                               donor_col = "donor", cell_type_col = "cell_type",
                               num_cells_col = "num_cells") {
-  # Filter cell types with at least min_n donors and min_pct of non-zero
-  # num_cells per combinations of grouping variables
+  #' Filter cell types based on specified criteria
+  #'
+  #' This function filters cell types based on the specified criteria, including
+  #'  the number of donors (\code{min_n}), the percentage of non-zero
+  #'  \code{num_cells}, and the number of grouping variables (\code{covs_n}).
+  #'
+  #' @param data A data frame containing the relevant columns.
+  #' @param grouping_vars A character vector specifying the grouping variable(s).
+  #' @param min_n The minimum number of donors for a cell type to be considered.
+  #' @param min_pct The minimum percentage of non-zero \code{num_cells} for a
+  #' cell type to be considered.
+  #' @param covs_n The minimum number of grouping variables to be considered.
+  #' @param donor_col The name of the column containing donor information.
+  #' @param cell_type_col The name of the column containing cell type information.
+  #' @param num_cells_col The name of the column containing the number of cells information.
+  #'
+  #' @return A character vector containing the filtered cell types.
+  #'
+  #' @details This function filters cell types based on the specified criteria. It checks for
+  #' the minimum number of donors (\code{min_n}), the minimum percentage of non-zero
+  #' \code{num_cells} (\code{min_pct}), and the minimum number of grouping variables (\code{covs_n}).
+  #' The resulting character vector contains the cell types that meet the specified criteria.
+  #'
+  #' @examples
+  #' \dontrun{
+  #' filtered_types <- filter_cell_types(your_data, c("grouping_var1", "grouping_var2"), 5, 0.1, 3)
+  #' }
+  #'
+  #' @seealso \code{\link{dplyr::group_by}}, \code{\link{dplyr::summarize}}, \code{\link{dplyr::filter}},
+  #' \code{\link{tidyr::drop_na}}, \code{\link{tidyr::pull}}
+  #'
+  #' @importFrom dplyr n_distinct group_by summarize filter pull
+  #' @importFrom tidyr drop_na
+  #'
+  #' @export
 
-  # Get all cell types
+  # Safety checks
+  if (!is.data.frame(data)) {
+    stop("Input 'data' must be a data frame.")
+  }
+
+  if (!is.character(grouping_vars) || length(grouping_vars) == 0) {
+    stop("Input 'grouping_vars' must be a non-empty character vector.")
+  }
+
+  if (!is.character(donor_col) || !is.character(cell_type_col) || !is.character(num_cells_col)) {
+    stop("Columns 'donor_col', 'cell_type_col', and 'num_cells_col' must be character strings.")
+  }
+
+  if (!is.numeric(min_n) || !is.numeric(min_pct) || !is.numeric(covs_n)) {
+    stop("Inputs 'min_n', 'min_pct', and 'covs_n' must be numeric.")
+  }
+
+  # Get unique cell types
   cell_types <- unique(data[[cell_type_col]])
   cell_types <- structure(cell_types, names = cell_types)
 
   # Filter
   cell_types_filtered <- data %>%
     tidyr::drop_na(!!sym(cell_type_col)) %>%
-    dplyr::group_by(!!sym(cell_type_col), !!!syms(grouping_vars)) %>%
+    {
+      # Group by multiple variables if more than one grouping variable
+      if (length(grouping_vars) > 1) {
+        dplyr::group_by(., !!sym(cell_type_col), !!!syms(grouping_vars))
+      } else {
+        # Group by a single variable
+        dplyr::group_by(., !!sym(cell_type_col), !!sym(grouping_vars))
+      }
+    } %>%
     dplyr::summarize(
       n_donor = dplyr::n_distinct(!!sym(donor_col)),
       absent = mean(!!sym(num_cells_col) != 0) <= min_pct
     ) %>%
     dplyr::filter(n_donor >= min_n, absent == FALSE) %>%
     dplyr::group_by(!!sym(cell_type_col)) %>%
-    dplyr::summarize(
-      n_donor = sum(n_donor),
-      n_grouping = dplyr::n_distinct(!!!syms(grouping_vars))
-    ) %>%
-    dplyr::filter(n_donor >= covs_n, n_grouping >= 2) %>%
+    dplyr::summarize(., n_donor = sum(n_donor)) %>%
+    dplyr::filter(n_donor >= covs_n) %>%
     dplyr::pull(!!sym(cell_type_col))
 
+  # Return filtered cell types
   cell_types[cell_types %in% cell_types_filtered]
 }
 
@@ -146,10 +202,10 @@ get_h5ad_expr <- function(h5ad, transpose = T, class = "H5SparseMatrix") {
   obs_attr <- rhdf5::h5readAttributes(h5ad, "obs")
   obs_i <- rhdf5::h5read(h5ad, paste0("obs/", obs_attr[["_index"]]))
   var_attr <- rhdf5::h5readAttributes(h5ad, "var")
-  # Keeping support for old versions of AnnData
-  if (length(var_attr[["_index"]]) > 1) {
-    var_i <- rhdf5::h5read(h5ad, paste0("var/", var_attr[["_index"]]))
-  } else {
+  # Import string or category var names
+  if (var_attr[["_index"]] == "_index") {
+    var_i <- rhdf5::h5read(h5ad, "var/_index")
+  } else if (var_attr[["_index"]] == "feature_name") {
     var_i <- rhdf5::h5read(h5ad, "var/feature_name")
     var_i <- var_i$categories[var_i$codes + 1]
   }
