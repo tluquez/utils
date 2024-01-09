@@ -79,6 +79,12 @@ filter_cell_types <- function(data, grouping_vars, min_n, min_pct, covs_n,
     stop("Inputs 'min_n', 'min_pct', and 'covs_n' must be numeric.")
   }
 
+  # Remove continuous grouping variables
+  if (any(purrr::map_lgl(data[,grouping_vars], is.numeric))) {
+    grouping_vars <- grouping_vars[!purrr::map_lgl(data[,grouping_vars],
+                                                   is.numeric)]
+  }
+
   # Get unique cell types
   cell_types <- unique(data[[cell_type_col]])
   cell_types <- structure(cell_types, names = cell_types)
@@ -87,12 +93,15 @@ filter_cell_types <- function(data, grouping_vars, min_n, min_pct, covs_n,
   cell_types_filtered <- data %>%
     tidyr::drop_na(!!sym(cell_type_col)) %>%
     {
-      # Group by multiple variables if more than one grouping variable
+      # Group by multiple categorical grouping variables
       if (length(grouping_vars) > 1) {
         dplyr::group_by(., !!sym(cell_type_col), !!!syms(grouping_vars))
-      } else {
-        # Group by a single variable
+      } else if (length(grouping_vars) == 1) {
+        # Group by a single categorical grouping variable
         dplyr::group_by(., !!sym(cell_type_col), !!sym(grouping_vars))
+      } else {
+        # Group by cell type only
+        dplyr::group_by(., !!sym(cell_type_col))
       }
     } %>%
     dplyr::summarize(
@@ -1479,7 +1488,7 @@ de_pseudobulk <- function(input, meta, model, contrast,
       }
       # Check inputs
       if (!identical(sort(colnames(expr)), sort(rownames(meta)))) {
-        stop("Observation names between expression and metadata do not match.")
+        stop("Observation names don't match between expression and metadata")
       }
       covs <- all.vars(model)
       if (!all(covs %in% colnames(meta))) {
