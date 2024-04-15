@@ -23,6 +23,15 @@ sink_all <- function(expr, output_file) {
   })
 }
 
+Mode <- function(x, na.rm = FALSE) {
+  if (na.rm) {
+    x <- x[!is.na(x)]
+  }
+
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
 filter_cell_types <- function(data, grouping_vars, min_n, min_pct, covs_n,
                               donor_col = "donor", cell_type_col = "cell_type",
                               num_cells_col = "num_cells") {
@@ -1463,7 +1472,7 @@ de_pseudobulk <- function(input, meta, model, contrast,
   # contrast numeric or character. Position or name of the contrast in colnames(design.matrix(model, data = meta)).
   # verbose logical. Level fo information displayed.
   # return_interm logical. If TRUE, returns intermediate files.
-  # Inpired by https://github.com/neurorestore/Libra/blob/main/R/pseudobulk_de.R
+  # Inspired by https://github.com/neurorestore/Libra/blob/main/R/pseudobulk_de.R
   # TODO:
   # - Allow for multiple contrasts in limma. In which case an F statistic will be returned by toptalble(). rdrr.io/bioc/limma/man/toptable.html
 
@@ -2105,6 +2114,628 @@ wFisher <- function(p, weight = NULL, is.onetail = TRUE, eff.sign) {
     list(p = min(1, resultP), overall.eff.direction = overall.eff.direction)
   }
   return(RES)
+}
+
+get_props_tidyverse <- function(data, id, cluster, supercluster = NULL,
+                                add_supercluster_prop = T) {
+  #' Compute proportions per id across cluster
+  #'
+  #' This function computes the proportions per donor per broad from the input data.
+  #'
+  #' @param data A data frame containing at least the columns id, cluster, and supercluster.
+  #' @param id The column name for the sample information.
+  #' @param cluster The column name for the cluster information.
+  #' @param supercluster The column name for the supercluster information.
+  #' @param add_supercluster_prop Logical indicating whether to include proportions per donor across broad.
+  #'
+  #' @return A data frame with computed proportions per donor per broad.
+  #'
+  #' @examples
+  #' # Example usage
+  #' df <- data.frame(donor = rep(1:3, times = 4),
+  #'                  cell_type = rep(letters[1:4], each = 3, times = 4),
+  #'                  broad = rep(c("AB", "CD"), each = 6, times = 2))
+  #' #' get_props(df, donor, cell_type, broad)
+  #'
+  #' @importFrom dplyr group_by summarize n mutate ungroup bind_rows filter distinct
+  #' @importFrom tidyr complete fill
+  #' @importFrom tibble remove_rownames
+  #' @importFrom rlang as_string ensym
+  #' @importFrom purrr map
+  #' @importFrom magrittr %>%
+  #' @importFrom stats sum
+  #' @importFrom base unique
+  #'
+  #' @export
+
+  # Convert column names to symbols if they are strings
+  id <- rlang::ensym(id)
+  cluster <- rlang::ensym(cluster)
+  supercluster <- rlang::ensym(supercluster)
+
+  # Check if input data is a data frame
+  if (!is.data.frame(data)) {
+    stop("Input data must be a data frame.")
+  }
+
+  # Check if required columns exist in the input data frame
+  required_cols <- c(rlang::as_string(supercluster),
+                     rlang::as_string(cluster),
+                     rlang::as_string(id))
+  if (!all(required_cols %in% names(data))) {
+    missing_cols <- required_cols[!required_cols %in% names(data)]
+    stop(paste("Input data is missing columns:",
+               paste(missing_cols, collapse = ", ")))
+  }
+
+  if (!is.null(supercluster)) {
+    # Compute proportions per id x cluster x supercluster
+    result <- data %>%
+      dplyr::group_by(!!supercluster, !!cluster, !!id) %>%
+      dplyr::summarize(num_cluster = dplyr::n(), .groups = "drop_last") %>%
+      dplyr::group_by(!!supercluster, !!id) %>%
+      dplyr::mutate(num_supercluster = sum(num_cluster, na.rm = T),
+                    prop = num_cluster / num_supercluster) %>%
+      dplyr::ungroup()
+
+    # Add proportions per id across supercluster if requested
+    if (add_supercluster_prop) {
+      supercluster_prop <- result %>%
+        dplyr::group_by(!!supercluster, !!id) %>%
+        dplyr::summarize(num_cluster = unique(num_supercluster),
+                         .groups = "drop_last") %>%
+        dplyr::group_by(!!id) %>%
+        dplyr::mutate(num_supercluster = sum(num_cluster),
+                      prop = num_cluster / num_supercluster,
+                      !!cluster := !!supercluster,
+                      !!supercluster := rlang::as_string(supercluster)) %>%
+        dplyr::ungroup()
+
+      result <- dplyr::bind_rows(result, supercluster_prop)
+    }
+  } else {
+    # Compute proportions per id x cluster x supercluster
+    result <- data %>%
+      dplyr::group_by(!!cluster, !!id) %>%
+      dplyr::summarize(num_cluster = dplyr::n(), .groups = "drop_last") %>%
+      dplyr::group_by(!!id) %>%
+      dplyr::mutate(num_supercluster = sum(num_cluster, na.rm = T),
+                    prop = num_cluster / num_supercluster) %>%
+      dplyr::ungroup()
+  }
+
+  # Add props=0 for the ids without a cluster
+  result <- result %>%
+    dplyr::group_by(!!supercluster) %>%
+    tidyr::complete(!!cluster, !!id,
+                    fill = list(num_cluster = 0, prop = 0)) %>%
+    dplyr::group_by(!!supercluster, !!id) %>%
+    tidyr::fill(num_supercluster, .direction = "downup") %>%
+    dplyr::ungroup()
+
+  # Safety tests
+  # Ensure all levels of required arguments are present in the output
+  # same_unique_elements <- purrr::map_lgl(required_cols, function(i) {
+  #   length(unique(data[[i]])) == length(unique(results[[i]]))
+  #   })
+  # if (any(!same_unique_elements)) stop("")
+
+  # Ensure no new combinations were created except id x cluster
+  original_combs <- data %>%
+    dplyr::distinct(!!supercluster, !!cluster, !!id) %>%
+    tibble::remove_rownames()
+  result_combs <- result %>%
+    dplyr::filter(!!supercluster != rlang::as_string(supercluster))
+  new_combs <- dplyr::anti_join(result_combs, original_combs,
+                                by = required_cols) %>%
+    dplyr::summarize(num_cluster = sum(num_cluster), .groups = "drop_last") %>%
+    dplyr::pull(num_cluster) %>%
+    unique()
+  if (new_combs != 0) stop("New id x cluster combinations were created.")
+
+  # Ensure proportions add up to 1
+  props_sum <- result %>%
+    dplyr::group_by(!!supercluster, !!id) %>%
+    dplyr::summarize(n = round(sum(prop), 2), .groups = "drop_last") %>%
+    dplyr::pull(n) %>%
+    unique()
+  if (props_sum != 1) stop("Porportions don't add up to 1.")
+
+  # Clean up
+  rm(original_combs, result_combs, new_combs, props_sum)
+
+  return(result)
+}
+
+get_props <- function(data, id, cluster, supercluster = NULL,
+                      add_supercluster_prop = NULL, add_other_cols = T) {
+  #' Compute Proportions
+  #'
+  #' This function computes proportions per id across cluster. It can group by
+  #'  supercluster and compute proportions per group. It can also add
+  #'  supercluster proportions across all its levels. Finally, it summarizes
+  #'  other columns of data per id.
+  #'
+  #' @param data Data frame containing \code{id} and \code{cluster}.
+  #' @param id The column name representing the observations identifier.
+  #' @param cluster The column name representing the cluster identifier.
+  #' @param supercluster Optional. The column name representing the supercluster
+  #'  identifier.
+  #' @param add_supercluster_prop Logical indicating whether to
+  #'  include proportions per id across superclusters.
+  #'
+  #' @return A long data frame with computed proportions per group and summary
+  #'  statistics.
+  #' - \code{"num_cluster"}: The number of occurrences of each group combination.
+  #' - \code{"props"}: The proportions of each group combination within its
+  #'  supercluster.
+  #' - \code{"supercluster"}: The supercluster associated with each group.
+  #' - \code{"num_supercluster"}: The total number of occurrences of each
+  #'  \code{supercluster}-\code{id} combination.
+  #'
+  #' @details This function calculates proportions per group based on the counts of another
+  #' column, and summarizes other columns by group, calculating means for numeric columns,
+  #' reference levels for factor columns, and the mode for character columns.
+  #'
+  #' @examples
+  #' df <- data.frame(id = rep(1:3, each = 4),
+  #'                  cluster = rep(c("a", "b"), each = 2, times = 3),
+  #'                  supercluster = "A",
+  #'                  value1 = runif(12),
+  #'                  value2 = as.factor(LETTERS[1:12]),
+  #'                  value3 = LETTERS[1:12],
+  #'                  value4 = NA)
+  #' get_props(df, "id", "cluster", "supercluster", add_supercluster_prop = TRUE)
+  #' get_props(df, "id", "cluster", "supercluster")
+  #' get_props(df, "id", "cluster")
+  #'
+  #' @import dplyr
+  #' @import tidyr
+  #' @importFrom magrittr %>%
+  #'
+  #' @export
+  #'
+  if (!is.data.frame(data)) {
+    stop("Input 'data' must be a data frame.")
+  }
+
+  # Input Validation
+  required_cols <- c(id, cluster)
+  if (!is.null(supercluster)) {
+    required_cols <- c(required_cols, supercluster)
+  }
+  invalid_args <- c(
+    "id" = !is.character(id),
+    "cluster" = !is.character(cluster),
+    "supercluster" = !is.null(supercluster) && !is.character(supercluster)
+  )
+  invalid_args <- names(invalid_args)[invalid_args]
+  if (length(invalid_args) > 0) {
+    stop(paste("Argument(s) ", paste(invalid_args, collapse = ", "),
+               " must be character vector(s)."))
+  }
+
+  # Proportion Calculation
+  if (!is.null(supercluster)) {
+    # Proportions by supercluster x cluster x id
+    data_groups <- split(data, data[[supercluster]])
+    props <- lapply(data_groups, function(data_group) {
+      # Proportion per supercluster by cluster x id
+      nums_cluster <- table(data_group[[id]], data_group[[cluster]])
+      prop <- as.data.frame(prop.table(nums_cluster, margin = 1))
+      nums_cluster <- as.data.frame(nums_cluster)
+
+      # Count observations per supercluster x id
+      nums_supercluster <- data.frame(table(data_group[[id]],
+                                            data_group[[supercluster]]))
+
+      # Left join and rename
+      prop <- merge(nums_cluster, prop, by = c("Var1", "Var2"))
+      prop <- merge(prop, nums_supercluster, by = "Var1")
+      colnames(prop) <- c(id, cluster, paste0("num_", cluster), "props",
+                           supercluster, paste0("num_", supercluster))
+
+      prop
+    })
+    props <- do.call(rbind, props)
+    rownames(props) <- NULL
+
+    # Add proportions per supercluster column if requested
+    if (!is.null(add_supercluster_prop)) {
+      # Proportion by supercluster x id
+      nums_supercluster <- table(data[[id]], data[[supercluster]])
+      prop <- as.data.frame(prop.table(nums_supercluster, margin = 1))
+      nums_supercluster <- as.data.frame(nums_supercluster)
+
+      # Count observations per id across superclusters
+      nums_id <- data.frame(table(data[[id]]))
+      nums_id$Var2 <- supercluster
+      nums_id <- nums_id[, c("Var1", "Var2", "Freq")]
+
+      # Left join and rename
+      prop <- merge(nums_supercluster, prop, by = c("Var1", "Var2"))
+      prop <- merge(prop, nums_id, by = "Var1")
+      colnames(prop) <- c(id, cluster, paste0("num_", cluster), "props",
+                          supercluster, paste0("num_", supercluster))
+
+      props <- rbind(props, prop)
+    }
+  } else {
+    # Proportion by cluster x id
+    nums_cluster <- table(data[[id]], data[[cluster]])
+    prop <- as.data.frame(prop.table(nums_cluster, margin = 1))
+    nums_cluster <- as.data.frame(nums_cluster)
+
+    # Left join and rename
+    props <- merge(nums_cluster, prop, by = c("Var1", "Var2"))
+    colnames(props) <- c(id, cluster, paste0("num_", cluster), "props")
+
+    props
+  }
+
+  # Ensure column types conform to data
+  props[[id]] <- as(props[[id]], class(data[[id]]))
+  props[[cluster]] <- as(props[[cluster]], class(data[[cluster]]))
+  if (!is.null(supercluster)) {
+    props[[supercluster]] <- as(props[[supercluster]],
+                                class(data[[supercluster]]))
+  }
+
+  # Summarize other columns by id
+  other_columns <- setdiff(names(data), required_cols)
+  if (add_other_cols && length(other_columns) > 0) {
+    df <- data %>%
+      dplyr::group_by(!!dplyr::ensym(id)) %>%
+      dplyr::summarise(
+        dplyr::across(
+          dplyr::all_of(other_columns),
+          ~ {
+            if (is.numeric(.)) mean(., na.rm = T)
+            else if (is.factor(.)) levels(.)[which.max(table(.))]
+            else if (length(unique(.)) > 1) unique(.)[which.max(table(.))]
+            else NA
+          }
+        ),
+        .groups = "drop_last"
+      ) %>%
+      dplyr::ungroup()
+
+    # Merge with the existing dataframe
+    props <- dplyr::left_join(props, df, by = id)
+  }
+
+  return(props)
+}
+
+get_response <- function(formula) {
+  if (class(formula) != "formula") {
+    stop("Not formula object")
+  }
+  xs <- attr(terms(formula(formula)), which = "term.labels")
+  all.vars(formula)[!all.vars(formula) %in% xs]
+}
+
+get_covs <- function(formula) {
+  if (class(formula) != "formula") {
+    stop("Not formula object")
+  }
+  attr(terms(formula(formula)), which = "term.labels")
+}
+
+robust_glm <- function(formula, data, subset = NULL, family = "binomial",
+                       robust_weights = T, sandwich = T, add_ci = T, p = NULL) {
+  #' Fit a Generalized Linear Model with Robust Estimation
+  #'
+  #' This function fits a generalized linear model (GLM) with robust estimation
+  #' options including robust weights and sandwich standard errors.
+  #'
+  #' @param formula A formula specifying the model.
+  #' @param data A data frame containing the variables in the model.
+  #' @param subset An optional character vector specifying a subset of observations
+  #'               to be used in the model.
+  #' @param family A character string or function (see \code{lm()}) specifying
+  #' the distribution family in the GLM (default is "binomial").
+  #' @param robust_weights Logical indicating whether to compute robust model weights
+  #'                       (default is TRUE).
+  #' @param sandwich Logical indicating whether to compute sandwich standard errors
+  #'                 (default is TRUE).
+  #' @param add_ci Logical indicating whether to add confidence intervals to the model
+  #'               coefficients (default is TRUE).
+  #' @param p An optional progressor object to monitor progress (default is NULL).
+  #'
+  #' @return An object of class \code{"glm"} with additional attributes such as
+  #'         confidence intervals, sandwich standard errors, and collinear terms.
+  #'
+  #' @examples
+  #' df <- data.frame(y = runif(50, 0, 1),
+  #'                  x1 = rep(1:2, 50),
+  #'                  x2 = runif(50, .5, 1),
+  #'                  x3 = runif(50, 0, .5))
+  #' fit <- robust_glm(y ~ x1 + x2, df, family = "quasibinomial")
+  #' summary(fit)
+  #'
+  #' @importFrom MASS rlm
+  #' @importFrom bestNormalize bestNormalize
+  #' @importFrom sandwich vcovHC
+  #' @importFrom lmtest coeftest coefci
+  #' @export
+
+  # Input validation
+  if (missing(formula) || missing(data)) {
+    stop("Both 'formula' and 'data' arguments must be provided.")
+  }
+  if (!inherits(formula, "formula") && !is.character(formula)) {
+    stop("Argument 'formula' must be either a character formula or a formula object.")
+  }
+  if (!inherits(formula, "formula") && is.character(formula)) {
+    formula <- as.formula(formula)
+  }
+  if (!is.data.frame(data)) {
+    stop("Argument 'data' must be a data frame.")
+  }
+  if (!is.null(subset) && !is.character(subset)) {
+    stop("Argument 'subset' must be a character vector.")
+  }
+
+  # Subset data
+  if (!is.null(subset)) {
+    data <- subset(data, eval(parse(text = subset)))
+  }
+
+  # Clean data
+  data <- data[, all.vars(formula)]
+  data <- na.omit(data)
+
+  # Set up the progressor progress bar
+  if (!is.null(p) && inherits(p, "progressor")) {
+    p()
+  }
+
+  # Extract model terms
+  y <- get_response(formula)
+  covs <- attr(terms(formula),"term.labels")
+
+  # Check if terms are present in the data
+  missing_terms <- c(y, covs)[!(c(y, covs) %in% names(data))]
+  if (length(missing_terms) > 0) {
+    stop("Variable(s) '", paste(missing_terms, collapse = "', '"),
+         "' not found in the data.")
+  }
+
+  # Extract the response variable values
+  prop <- data[[y]]
+
+  # Check if response variable has missing values
+  if (any(is.na(prop))) {
+    stop("Response variable contains missing values.")
+  }
+
+  # Check for collinear terms
+  x <- model.matrix(formula, data)
+  ncovs <- ncol(x)
+  QR <- qr(x)
+  if (QR$rank < ncovs) {
+    collinear_terms <- colnames(x)[QR$pivot[(QR$rank + 1):ncovs]]
+    if (all(collinear_terms %in% covs)) {
+      formula <- reformulate(covs[!covs %in% collinear_terms], response = y)
+    }
+    collinear_terms <- paste(collinear_terms, collapse = ", ")
+
+    warning("Dropped collinear terms: ", collinear_terms)
+  } else {
+    collinear_terms <- NULL
+  }
+
+  # Compute robust model weights if requested
+  if (robust_weights && is.numeric(data[[y]]) &&
+      length(unique(data[[y]])) > 2) {
+    # From [0, 1] to (-Inf, +Inf)
+    data$prop_norm <- bestNormalize::bestNormalize(prop, loo = T, quiet = T)$x.t
+    robust_formula <- update.formula(formula, prop_norm ~ .)
+    weights <- MASS::rlm(robust_formula, data = data)$w
+
+    if (length(weights) != length(prop)) {
+      stop("Weight and response have different lengths. Any NA maybe?")
+    }
+
+    data$weights <- weights
+  }
+
+  # Fit a generalized linear model with robust weights
+  fit <- stats::glm(formula, data = data, family = family, weights = weights)
+
+  if (add_ci) {
+    fit$ci <- suppressMessages(confint(fit))
+    colnames(fit$ci) <- c("conf.low", "conf.high")
+  }
+
+  # Add sandwich errors
+  if (sandwich) {
+    vcov_mat <- sandwich::vcovHC(fit, type = "HC3")
+    fit$sandwich <- lmtest::coeftest(fit, vcov. = vcov_mat)
+    sandwich_ci <- lmtest::coefci(fit, vcov. = vcov_mat)
+    fit$sandwich <- cbind(fit$sandwich, sandwich_ci)
+    colnames(fit$sandwich) <- c("estimate", "std.error", "statistic", "p.value",
+                                "conf.low", "conf.high")
+  }
+
+  # Add collinear terms
+  fit$collinear_terms <- collinear_terms
+
+  # Add class robust_glm
+  class(fit) <- c(class(fit), "robust_glm")
+
+  return(fit)
+}
+
+tidy_terms <- function(model, id = "id", ...) {
+  #' Tidy Model Terms
+  #'
+  #' This function tidies model terms, including coefficients, confidence intervals,
+  #' and sandwich standard errors, from a list of model objects or a single model object.
+  #'
+  #' @param model A list of or a single robust_glm object.
+  #' @param id A character string specifying the identifier column name
+  #'  (default is "id").
+  #' @param ... Arguments passed to \code{broom::tidy()}.
+  #'
+  #' @return A data frame containing tidied model terms with columns:
+  #' \describe{
+  #'   \item{\code{id}}{Identifier column name.}
+  #'   \item{\code{term}}{Model term names.}
+  #'   \item{\code{estimate}}{Estimate of coefficients.}
+  #'   \item{\code{std.error}}{Standard error of coefficients.}
+  #'   \item{\code{statistic}}{Value of test statistics.}
+  #'   \item{\code{p.value}}{p-value of test statistics.}
+  #'   \item{\code{conf.low}}{Lower bound of confidence interval.}
+  #'   \item{\code{conf.high}}{Upper bound of confidence interval.}
+  #'   \item{\code{std.error_hc}}{Sandwich standard error of coefficients.}
+  #'   \item{\code{statistic_hc}}{Value of test statistics with sandwich
+  #'    standard errors.}
+  #'   \item{\code{p.value_hc}}{p-value of test statistics with sandwich
+  #'    standard errors.}
+  #'   \item{\code{conf.low_hc}}{Lower bound of confidence interval with
+  #'    sandwich standard errors.}
+  #'   \item{\code{conf.high_hc}}{Upper bound of confidence interval with
+  #'    sandwich standard errors.}
+  #' }
+  #'
+  #' @importFrom broom tidy
+  #' @importFrom tibble as_tibble
+  #' @importFrom dplyr bind_cols select rename_with
+  #' @export
+
+  if (!inherits(model, "robust_glm")) {
+    stop("model must be of class robust_glm.")
+  }
+
+  # If lm or glm supplied, convert to a list
+  if (inherits(model, c("lm", "glm"))) {
+    model <- list(model)
+  }
+
+  # Check if model contains at least one model object
+  if (length(model) == 0) {
+    stop("model must contain at least one model object.")
+  }
+
+  # Tidy terms for each model object and combine results
+  terms_df <- purrr::map_dfr(model, function(mod) {
+    # Check if mod is a valid model object
+    if (!inherits(mod, c("lm", "glm"))) {
+      stop("Model must be a valid 'lm' or 'glm' object.")
+    }
+
+    # Check if mod contains ci and sandwich, and they are not NA
+    ci_df <- if (!is.null(mod$ci) && !all(is.na(mod$ci))) {
+      as_tibble(mod$ci)
+    } else {
+      tibble::tibble(conf.low = NA, conf.high = NA)
+    }
+
+    sandwich_df <- if (!is.null(mod$sandwich) && !all(is.na(mod$sandwich))) {
+      as_tibble(mod$sandwich) %>%
+        select(-estimate) %>%
+        rename_with(~paste0(.x, "_hc"))
+    } else {
+      tibble::tibble(std.error_hc = NA, statistic_hc = NA,
+                     p.value_hc = NA, conf.low_hc = NA, conf.high_hc = NA)
+    }
+
+    # Tidy model terms and combine with ci and sandwich
+    dplyr::bind_cols(broom::tidy(mod, ...), ci_df, sandwich_df)
+  }, .id = id)
+
+  return(terms_df)
+}
+
+tidy_models <- function(model, id = "id", ...) {
+  #' Tidy Model Summary Statistics
+  #'
+  #' Tidies summary statistics of model objects, such as convergence status,
+  #' dispersion, and performance metrics.
+  #'
+  #' @param model A list of or a single robust_glm object.
+  #' @param id A character string specifying the identifier column name
+  #'  (default is "id").
+  #' @param ... Arguments passed to \code{broom::tidy()}.
+  #'
+  #' @return A data frame containing tidied model summary statistics with
+  #'  columns:
+  #' \describe{
+  #'   \item{\code{id}}{Identifier column name.}
+  #'   \item{\code{converged}}{Convergence status of the model.}
+  #'   \item{\code{dispersion}}{Dispersion value of the model.}
+  #'   \item{\code{glance}}{Summary statistics of the model.}
+  #'   \item{\code{rmse}}{Root mean square error.}
+  #'   \item{\code{mse}}{Mean square error.}
+  #'   \item{\code{hosmer_chisq}}{Hosmer goodness-of-fit test statistic.}
+  #'   \item{\code{hosmer_df}}{Degrees of freedom for Hosmer goodness-of-fit
+  #'    test.}
+  #'   \item{\code{hosmer_p.value}}{p-value of Hosmer goodness-of-fit test.}
+  #'   \item{\code{R2_Tjur}}{Tjur's R-squared.}
+  #'   \item{\code{Log_loss}}{Logarithmic loss.}
+  #' }
+  #'
+  #' @importFrom purrr map_dfr
+  #' @importFrom broom glance
+  #' @importFrom performance performance_rmse performance_mse performance_hosmer
+  #' @importFrom performance r2_tjur performance_logloss
+  #' @importFrom tibble as_tibble
+  #' @importFrom dplyr bind_cols
+  #' @export
+
+
+  if (!inherits(model, "robust_glm")) {
+    stop("model must be of class robust_glm.")
+  }
+
+  # If lm or glm supplied, convert to a list
+  if (inherits(model, c("lm", "glm"))) {
+    model <- list(model)
+  }
+
+  # Check if model contains at least one model object
+  if (length(model) == 0) {
+    stop("Model must contain at least one model object.")
+  }
+
+  # Tidy summary statistics for each model object and combine results
+  mods_df <- purrr::map_dfr(model, function(mod) {
+    # Check if mod is a valid model object
+    if (!inherits(mod, "lm") && !inherits(mod, "glm")) {
+      stop("Model must be a valid 'lm' or 'glm' object.")
+    }
+
+    # Extract summary statistics from the model object
+    summary_stats <- list(
+      converged = tryCatch(mod$converged, error = function(e) NA),
+      dispersion = tryCatch(
+        if ("dispersion" %in% names(summary(mod))) summary(mod)$dispersion else NA,
+        error = function(e) NA
+      ),
+      glance = tryCatch(broom::glance(mod, ...), error = function(e) NA),
+      rmse = tryCatch(performance::performance_rmse(mod),
+                      error = function(e) NA),
+      mse = tryCatch(performance::performance_mse(mod),
+                     error = function(e) NA),
+      hosmer_chisq = tryCatch(performance::performance_hosmer(mod)$chisq,
+                              error = function(e) NA),
+      hosmer_df = tryCatch(performance::performance_hosmer(mod)$df,
+                           error = function(e) NA),
+      hosmer_p.value = tryCatch(performance::performance_hosmer(mod)$p.value,
+                                error = function(e) NA),
+      R2_Tjur = tryCatch(performance::r2_tjur(mod)[[1]],
+                         error = function(e) NA),
+      Log_loss = tryCatch(performance::performance_logloss(mod)[[1]],
+                          error = function(e) NA)
+    )
+
+    # Combine summary statistics into a data frame
+    tibble::as_tibble(summary_stats)
+  }, .id = id)
+
+  return(mods_df)
 }
 
 #EOF
