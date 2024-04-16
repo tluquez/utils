@@ -2247,6 +2247,85 @@ get_props_tidyverse <- function(data, id, cluster, supercluster = NULL,
   return(result)
 }
 
+summarize_by_group <- function(data, group, columns = NULL) {
+  #' Summarize data by group
+  #'
+  #' This function aggregates data by group and summarizes specified columns.
+  #'
+  #' @param data A data frame.
+  #' @param group A character vector specifying the grouping column(s).
+  #' @param columns Optional character vector specifying columns to summarize.
+  #' @return A data frame with summarized data.
+  #' @examples
+  #' mixed_df <- data.frame(
+  #'   Group = rep(letters[1:3], each = 3),
+  #'   Numeric_Value = c(1, 2, 3, 4, 5, 6, 7, 8, 9),
+  #'   Factor_Value = factor(c("low", "medium", "high"),
+  #'    levels = c("low", "medium", "high")),
+  #'   Character_Value = c("apple", "banana", "apple", "banana", "apple",
+  #'    "banana", "apple", "banana", "apple"),
+  #'   Logical_Value = c(TRUE, FALSE, TRUE, FALSE, TRUE, FALSE, TRUE, FALSE,
+  #'    TRUE),
+  #'   Date_Value = as.Date("2022-01-01") + 0:8,
+  #'   Complex_Value = as.complex(1:9)
+  #' )
+  #'
+  #' # Summarize all columns (default) by Group
+  #' summarize_by_group(mixed_df, "Group")
+  #'
+  #' # Summarize column Numeric_Value by Group
+  #' summarize_by_group(mixed_df, "Group", "Numeric_Value")
+  #'
+  #' # Summarize two columns by Group
+  #' summarize_by_group(mixed_df, "Group", c("Numeric_Value", "Factor_Value"))
+  #'
+  #' @export
+
+  # Validate input
+  if (!is.data.frame(data)) {
+    stop("data must be a dataframe")
+  }
+  if (!is.character(group) || length(group) == 0) {
+    stop("group must be a non-empty character vector")
+  }
+  if (!is.null(columns) && (!is.character(columns) || length(columns) == 0)) {
+    stop("columns must be a non-empty character vector")
+  }
+
+  # Get the columns to summarize
+  if (is.null(columns)) {
+    columns <- setdiff(names(data), group)
+  }
+
+  # If no columns to summarize, return unique combinations of group columns
+  if (length(columns) == 0) {
+    df <- dplyr::distinct(data, dplyr::across(tidyselect::all_of(group)))
+  }
+
+  # If columns need to be summarized, summarize columns by group
+  df <- data %>%
+    dplyr::group_by(dplyr::across(tidyselect::all_of(group))) %>%
+    dplyr::summarize(
+      dplyr::across(
+        dplyr::all_of(columns),
+        ~ {
+          if (is.numeric(.)) mean(., na.rm = TRUE)
+          else if (is.factor(.)) levels(.)[1]
+          else if (is.character(.)) unique(.)[which.max(table(.))]
+          else if (is.logical(.)) unique(.)[which.max(table(.))]
+          else if (inherits(., c("Date", "POSIXt"))) as.character(unique(.))[1]
+          else if (is.list(.)) NA
+          else if (is.complex(.)) NA
+          else NA
+        }
+      ),
+      .groups = "drop_last"
+    ) %>%
+    dplyr::ungroup()
+
+  return(df)
+}
+
 get_props <- function(data, id, cluster, supercluster = NULL,
                       add_supercluster_prop = NULL, add_other_cols = T) {
   #' Compute Proportions
@@ -2384,23 +2463,7 @@ get_props <- function(data, id, cluster, supercluster = NULL,
   # Summarize other columns by id
   other_columns <- setdiff(names(data), required_cols)
   if (add_other_cols && length(other_columns) > 0) {
-    df <- data %>%
-      dplyr::group_by(!!dplyr::ensym(id)) %>%
-      dplyr::summarise(
-        dplyr::across(
-          dplyr::all_of(other_columns),
-          ~ {
-            if (is.numeric(.)) mean(., na.rm = T)
-            else if (is.factor(.)) levels(.)[which.max(table(.))]
-            else if (length(unique(.)) > 1) unique(.)[which.max(table(.))]
-            else NA
-          }
-        ),
-        .groups = "drop_last"
-      ) %>%
-      dplyr::ungroup()
-
-    # Merge with the existing dataframe
+    df <- summarize_by_group(data, id, other_columns)
     props <- dplyr::left_join(props, df, by = id)
   }
 
@@ -2424,10 +2487,11 @@ get_covs <- function(formula) {
 
 robust_glm <- function(formula, data, subset = NULL, family = "binomial",
                        robust_weights = T, sandwich = T, add_ci = T, p = NULL) {
-  #' Fit a Generalized Linear Model with Robust Estimation
+  #' Fit a Generalized Linear Model with Robust Weights and Errors
   #'
-  #' This function fits a generalized linear model (GLM) with robust estimation
-  #' options including robust weights and sandwich standard errors.
+  #' This function fits a generalized linear model (GLM) with robust weights per
+  #'  observation, to down-weight outliers, and robust sandwich standard errors,
+  #'   to account for the lack of independance or heteroscedasticity.
   #'
   #' @param formula A formula specifying the model.
   #' @param data A data frame containing the variables in the model.
@@ -2568,7 +2632,7 @@ robust_glm <- function(formula, data, subset = NULL, family = "binomial",
   return(fit)
 }
 
-tidy_terms <- function(model, id = "id", ...) {
+tidy_terms <- function(model, id = NULL, ...) {
   #' Tidy Model Terms
   #'
   #' This function tidies model terms, including coefficients, confidence intervals,
@@ -2649,7 +2713,7 @@ tidy_terms <- function(model, id = "id", ...) {
   return(terms_df)
 }
 
-tidy_models <- function(model, id = "id", ...) {
+tidy_models <- function(model, id = NULL, ...) {
   #' Tidy Model Summary Statistics
   #'
   #' Tidies summary statistics of model objects, such as convergence status,
@@ -2714,7 +2778,6 @@ tidy_models <- function(model, id = "id", ...) {
         if ("dispersion" %in% names(summary(mod))) summary(mod)$dispersion else NA,
         error = function(e) NA
       ),
-      glance = tryCatch(broom::glance(mod, ...), error = function(e) NA),
       rmse = tryCatch(performance::performance_rmse(mod),
                       error = function(e) NA),
       mse = tryCatch(performance::performance_mse(mod),
@@ -2730,6 +2793,9 @@ tidy_models <- function(model, id = "id", ...) {
       Log_loss = tryCatch(performance::performance_logloss(mod)[[1]],
                           error = function(e) NA)
     )
+    glance_df <- tryCatch(broom::glance(mod), error = function(e) NA)
+    if (!is.null(glance_df)) summary_stats <- c(summary_stats,
+                                                as.list(glance_df))
 
     # Combine summary statistics into a data frame
     tibble::as_tibble(summary_stats)
