@@ -2725,13 +2725,15 @@ tidy_terms <- function(model, id = NULL, exponentiate = F) {
     }
 
     # Tidy model terms and combine with ci and sandwich
-    df <- purrr::reduce(list(broom::tidy(mod, ...), ci_df, sandwich_df),
+    df <- purrr::reduce(list(broom::tidy(mod), ci_df, sandwich_df),
                         dplyr::left_join, by = "term")
 
     # Exponentiate estimate and confidence intervals
-    df <- df %>%
-      dplyr::mutate(dplyr::across(dplyr::matches("conf|estimate"), exp,
-                                  .names = "{.col}_exp"))
+    if (exponentiate) {
+      df <- df %>%
+        dplyr::mutate(dplyr::across(dplyr::matches("conf|estimate"), exp,
+                                    .names = "{.col}_exp"))
+    }
 
     return(df)
   }, .id = id)
