@@ -2474,19 +2474,19 @@ get_response <- function(formula) {
   if (class(formula) != "formula") {
     stop("Not formula object")
   }
-  xs <- attr(terms(formula(formula)), which = "term.labels")
-  all.vars(formula)[!all.vars(formula) %in% xs]
+  all.vars(formula[[length(formula) - 1]])
 }
 
 get_covs <- function(formula) {
   if (class(formula) != "formula") {
     stop("Not formula object")
   }
-  attr(terms(formula(formula)), which = "term.labels")
+  all.vars(formula[[length(formula)]])
 }
 
-robust_glm <- function(formula, data, subset = NULL, family = "binomial",
-                       robust_weights = T, sandwich = T, add_ci = T, p = NULL) {
+robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
+                       robust_weights = T, sandwich = T, add_ci = T, p = NULL,
+                       ...) {
   #' Fit a Generalized Linear Model with Robust Weights and Errors
   #'
   #' This function fits a generalized linear model (GLM) with robust weights per
@@ -2506,6 +2506,7 @@ robust_glm <- function(formula, data, subset = NULL, family = "binomial",
   #' @param add_ci Logical indicating whether to add confidence intervals to the model
   #'               coefficients (default is TRUE).
   #' @param p An optional progressor object to monitor progress (default is NULL).
+  #' @param ... Other arguments passed on to \code{stats::glm}.
   #'
   #' @return An object of class \code{"glm"} with additional attributes such as
   #'         confidence intervals, sandwich standard errors, and collinear terms.
@@ -2546,18 +2547,9 @@ robust_glm <- function(formula, data, subset = NULL, family = "binomial",
     data <- subset(data, eval(parse(text = subset)))
   }
 
-  # Clean data
-  data <- data[, all.vars(formula)]
-  data <- na.omit(data)
-
-  # Set up the progressor progress bar
-  if (!is.null(p) && inherits(p, "progressor")) {
-    p()
-  }
-
   # Extract model terms
   y <- get_response(formula)
-  covs <- attr(terms(formula),"term.labels")
+  covs <- get_covs(formula)
 
   # Check if terms are present in the data
   missing_terms <- c(y, covs)[!(c(y, covs) %in% names(data))]
@@ -2566,12 +2558,21 @@ robust_glm <- function(formula, data, subset = NULL, family = "binomial",
          "' not found in the data.")
   }
 
+  # Clean data
+  data <- data[, c(y, covs)]
+
   # Extract the response variable values
   prop <- data[[y]]
 
-  # Check if response variable has missing values
+  # Automatically omit missing values in covs only
   if (any(is.na(prop))) {
     stop("Response variable contains missing values.")
+  }
+  data <- na.omit(data)
+
+  # Set up the progressor progress bar
+  if (!is.null(p) && inherits(p, "progressor")) {
+    p()
   }
 
   # Check for collinear terms
@@ -2596,17 +2597,21 @@ robust_glm <- function(formula, data, subset = NULL, family = "binomial",
     # From [0, 1] to (-Inf, +Inf)
     data$prop_norm <- bestNormalize::bestNormalize(prop, loo = T, quiet = T)$x.t
     robust_formula <- update.formula(formula, prop_norm ~ .)
-    weights <- MASS::rlm(robust_formula, data = data)$w
+    print(robust_formula)
+    rweights <- MASS::rlm(robust_formula, data = data)$w
 
-    if (length(weights) != length(prop)) {
+    if (length(rweights) != length(prop)) {
       stop("Weight and response have different lengths. Any NA maybe?")
     }
 
-    data$weights <- weights
-  }
+    data$rweights <- rweights
 
-  # Fit a generalized linear model with robust weights
-  fit <- stats::glm(formula, data = data, family = family, weights = weights)
+    # Fit a generalized linear model with robust weights
+    fit <- stats::glm(formula, data = data, family = family, weights = rweights,
+                      ...)
+  } else {
+    fit <- stats::glm(formula, data = data, family = family, ...)
+  }
 
   if (add_ci) {
     fit$ci <- suppressMessages(confint(fit))
@@ -2632,7 +2637,7 @@ robust_glm <- function(formula, data, subset = NULL, family = "binomial",
   return(fit)
 }
 
-tidy_terms <- function(model, id = NULL, ...) {
+tidy_terms <- function(model, id = NULL, exponentiate = F) {
   #' Tidy Model Terms
   #'
   #' This function tidies model terms, including coefficients, confidence intervals,
@@ -2641,7 +2646,8 @@ tidy_terms <- function(model, id = NULL, ...) {
   #' @param model A list of or a single robust_glm object.
   #' @param id A character string specifying the identifier column name
   #'  (default is "id").
-  #' @param ... Arguments passed to \code{broom::tidy()}.
+  #' @param exponentiate Logical. Exponentiate estimate and confidence
+  #'  intervals.
   #'
   #' @return A data frame containing tidied model terms with columns:
   #' \describe{
@@ -2662,11 +2668,19 @@ tidy_terms <- function(model, id = NULL, ...) {
   #'    sandwich standard errors.}
   #'   \item{\code{conf.high_hc}}{Upper bound of confidence interval with
   #'    sandwich standard errors.}
+  #'    \item{\code{estimate_exp}}{Exponentiated estimate.}
+  #'   \item{\code{conf.low_exp}}{Lower bound of exponentiated confidence
+  #'    interval.}
+  #'   \item{\code{conf.high_exp}}{Upper bound of exponentiated confidence
+  #'    interval.}
+  #'   \item{\code{std.error_exp}}{Exponentiated standard error.}
+  #'   \item{\code{std.error_hc_exp}}{Exponentiated sandwich standard error.}
   #' }
   #'
   #' @importFrom broom tidy
-  #' @importFrom tibble as_tibble
-  #' @importFrom dplyr bind_cols select rename_with
+  #' @importFrom tibble rownames_to_column
+  #' @importFrom dplyr left_join select rename_with
+  #' @importFrom purrr map_dfr reduce
   #' @export
 
   if (!inherits(model, "robust_glm")) {
@@ -2692,28 +2706,40 @@ tidy_terms <- function(model, id = NULL, ...) {
 
     # Check if mod contains ci and sandwich, and they are not NA
     ci_df <- if (!is.null(mod$ci) && !all(is.na(mod$ci))) {
-      as_tibble(mod$ci)
+      mod$ci %>%
+        as.data.frame() %>%
+        tibble::rownames_to_column("term")
     } else {
-      tibble::tibble(conf.low = NA, conf.high = NA)
+      data.frame(term = coef(mod), conf.low = NA, conf.high = NA)
     }
 
     sandwich_df <- if (!is.null(mod$sandwich) && !all(is.na(mod$sandwich))) {
-      as_tibble(mod$sandwich) %>%
-        select(-estimate) %>%
-        rename_with(~paste0(.x, "_hc"))
+      mod$sandwich %>%
+        as.data.frame() %>%
+        dplyr::select(-estimate) %>%
+        dplyr::rename_with(~ paste0(.x, "_hc")) %>%
+        tibble::rownames_to_column("term")
     } else {
-      tibble::tibble(std.error_hc = NA, statistic_hc = NA,
-                     p.value_hc = NA, conf.low_hc = NA, conf.high_hc = NA)
+      data.frame(term = coef(mod), std.error_hc = NA, statistic_hc = NA,
+                 p.value_hc = NA, conf.low_hc = NA, conf.high_hc = NA)
     }
 
     # Tidy model terms and combine with ci and sandwich
-    dplyr::bind_cols(broom::tidy(mod, ...), ci_df, sandwich_df)
+    df <- purrr::reduce(list(broom::tidy(mod, ...), ci_df, sandwich_df),
+                        dplyr::left_join, by = "term")
+
+    # Exponentiate estimate and confidence intervals
+    df <- df %>%
+      dplyr::mutate(dplyr::across(dplyr::matches("conf|estimate"), exp,
+                                  .names = "{.col}_exp"))
+
+    return(df)
   }, .id = id)
 
   return(terms_df)
 }
 
-tidy_models <- function(model, id = NULL, ...) {
+tidy_model <- function(model, id = NULL, ...) {
   #' Tidy Model Summary Statistics
   #'
   #' Tidies summary statistics of model objects, such as convergence status,
@@ -2793,9 +2819,9 @@ tidy_models <- function(model, id = NULL, ...) {
       Log_loss = tryCatch(performance::performance_logloss(mod)[[1]],
                           error = function(e) NA)
     )
-    glance_df <- tryCatch(broom::glance(mod), error = function(e) NA)
-    if (!is.null(glance_df)) summary_stats <- c(summary_stats,
-                                                as.list(glance_df))
+    glance_df <- tryCatch(broom::glance(mod, ...), error = function(e) NA)
+    if (!is.null(glance_df)) summary_stats <- c(as.list(glance_df),
+                                                summary_stats)
 
     # Combine summary statistics into a data frame
     tibble::as_tibble(summary_stats)
