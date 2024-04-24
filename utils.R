@@ -2342,6 +2342,7 @@ get_props <- function(data, id, cluster, supercluster = NULL,
   #'  identifier.
   #' @param add_supercluster_prop Logical indicating whether to
   #'  include proportions per id across superclusters.
+  #' @param add_other_cols Logical indicating whether to summarize other columns of \code{data} by \code{id}. Numeric columns are summarized to their mean, factor to the reference level and character to the mode.
   #'
   #' @return A long data frame with computed proportions per group and summary
   #'  statistics.
@@ -2597,7 +2598,6 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
     # From [0, 1] to (-Inf, +Inf)
     data$prop_norm <- bestNormalize::bestNormalize(prop, loo = T, quiet = T)$x.t
     robust_formula <- update.formula(formula, prop_norm ~ .)
-    print(robust_formula)
     rweights <- MASS::rlm(robust_formula, data = data)$w
 
     if (length(rweights) != length(prop)) {
