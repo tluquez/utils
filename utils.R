@@ -2562,14 +2562,14 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
   # Clean data
   data <- data[, c(y, covs)]
 
-  # Extract the response variable values
-  prop <- data[[y]]
-
   # Automatically omit missing values in covs only
   if (any(is.na(prop))) {
     stop("Response variable contains missing values.")
   }
   data <- na.omit(data)
+
+  # Extract the response variable values
+  prop <- data[[y]]
 
   # Set up the progressor progress bar
   if (!is.null(p) && inherits(p, "progressor")) {
