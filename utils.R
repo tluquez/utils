@@ -2561,11 +2561,6 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
 
   # Clean data
   data <- data[, c(y, covs)]
-
-  # Automatically omit missing values in covs only
-  if (any(is.na(prop))) {
-    stop("Response variable contains missing values.")
-  }
   data <- na.omit(data)
 
   # Extract the response variable values
