@@ -2678,10 +2678,6 @@ tidy_terms <- function(model, id = NULL, exponentiate = F) {
   #' @importFrom purrr map_dfr reduce
   #' @export
 
-  if (!inherits(model, "robust_glm")) {
-    stop("model must be of class robust_glm.")
-  }
-
   # If lm or glm supplied, convert to a list
   if (inherits(model, c("lm", "glm"))) {
     model <- list(model)
@@ -2696,7 +2692,10 @@ tidy_terms <- function(model, id = NULL, exponentiate = F) {
   terms_df <- purrr::map_dfr(model, function(mod) {
     # Check if mod is a valid model object
     if (!inherits(mod, c("lm", "glm"))) {
-      stop("Model must be a valid 'lm' or 'glm' object.")
+      stop("model must be a valid 'lm' or 'glm' object.")
+    }
+    if (!inherits(mod, "robust_glm")) {
+      stop("model must be of class robust_glm.")
     }
 
     # Check if mod contains ci and sandwich, and they are not NA
@@ -2705,7 +2704,7 @@ tidy_terms <- function(model, id = NULL, exponentiate = F) {
         as.data.frame() %>%
         tibble::rownames_to_column("term")
     } else {
-      data.frame(term = coef(mod), conf.low = NA, conf.high = NA)
+      data.frame(term = names(coef(mod)), conf.low = NA, conf.high = NA)
     }
 
     sandwich_df <- if (!is.null(mod$sandwich) && !all(is.na(mod$sandwich))) {
@@ -2715,7 +2714,7 @@ tidy_terms <- function(model, id = NULL, exponentiate = F) {
         dplyr::rename_with(~ paste0(.x, "_hc")) %>%
         tibble::rownames_to_column("term")
     } else {
-      data.frame(term = coef(mod), std.error_hc = NA, statistic_hc = NA,
+      data.frame(term = names(coef(mod)), std.error_hc = NA, statistic_hc = NA,
                  p.value_hc = NA, conf.low_hc = NA, conf.high_hc = NA)
     }
 
@@ -2772,11 +2771,6 @@ tidy_model <- function(model, id = NULL, ...) {
   #' @importFrom dplyr bind_cols
   #' @export
 
-
-  if (!inherits(model, "robust_glm")) {
-    stop("model must be of class robust_glm.")
-  }
-
   # If lm or glm supplied, convert to a list
   if (inherits(model, c("lm", "glm"))) {
     model <- list(model)
@@ -2792,6 +2786,9 @@ tidy_model <- function(model, id = NULL, ...) {
     # Check if mod is a valid model object
     if (!inherits(mod, "lm") && !inherits(mod, "glm")) {
       stop("Model must be a valid 'lm' or 'glm' object.")
+    }
+    if (!inherits(model, "robust_glm")) {
+      stop("model must be of class robust_glm.")
     }
 
     # Extract summary statistics from the model object
