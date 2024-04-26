@@ -2787,7 +2787,7 @@ tidy_model <- function(model, id = NULL, ...) {
     if (!inherits(mod, "lm") && !inherits(mod, "glm")) {
       stop("Model must be a valid 'lm' or 'glm' object.")
     }
-    if (!inherits(model, "robust_glm")) {
+    if (!inherits(mod, "robust_glm")) {
       stop("model must be of class robust_glm.")
     }
 
