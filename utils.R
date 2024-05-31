@@ -1254,7 +1254,7 @@ voomByGroup <- function(counts, group = NULL, design = NULL, lib.size = NULL,
   if (is(counts, "DGEList")) {
     out$genes <- counts$genes
     out$targets <- counts$samples
-    if(is.null(group))
+    if (is.null(group))
       group <- counts$samples$group
     # if (is.null(design) && diff(range(as.numeric(counts$sample$group))) > 0)
     #   design <- model.matrix(~group, data = counts$samples)
@@ -2326,7 +2326,7 @@ summarize_by_group <- function(data, group, columns = NULL) {
   return(df)
 }
 
-get_props <- function(data, id, cluster, supercluster = NULL,
+get_props <- function(data, id, cluster, supercluster = T,
                       add_supercluster_prop = NULL, add_other_cols = T) {
   #' Compute Proportions
   #'
@@ -2365,7 +2365,7 @@ get_props <- function(data, id, cluster, supercluster = NULL,
   #'                  value2 = as.factor(LETTERS[1:12]),
   #'                  value3 = LETTERS[1:12],
   #'                  value4 = NA)
-  #' get_props(df, "id", "cluster", "supercluster", add_supercluster_prop = TRUE)
+  #' get_props(df, "id", "cluster", "supercluster", add_supercluster_prop = T)
   #' get_props(df, "id", "cluster", "supercluster")
   #' get_props(df, "id", "cluster")
   #'
@@ -2412,7 +2412,7 @@ get_props <- function(data, id, cluster, supercluster = NULL,
       # Left join and rename
       prop <- merge(nums_cluster, prop, by = c("Var1", "Var2"))
       prop <- merge(prop, nums_supercluster, by = "Var1")
-      colnames(prop) <- c(id, cluster, paste0("num_", cluster), "props",
+      colnames(prop) <- c(id, cluster, paste0("num_", cluster), "prop",
                            supercluster, paste0("num_", supercluster))
 
       prop
@@ -2421,7 +2421,7 @@ get_props <- function(data, id, cluster, supercluster = NULL,
     rownames(props) <- NULL
 
     # Add proportions per supercluster column if requested
-    if (!is.null(add_supercluster_prop)) {
+    if (add_supercluster_prop) {
       # Proportion by supercluster x id
       nums_supercluster <- table(data[[id]], data[[supercluster]])
       prop <- as.data.frame(prop.table(nums_supercluster, margin = 1))
@@ -2435,7 +2435,7 @@ get_props <- function(data, id, cluster, supercluster = NULL,
       # Left join and rename
       prop <- merge(nums_supercluster, prop, by = c("Var1", "Var2"))
       prop <- merge(prop, nums_id, by = "Var1")
-      colnames(prop) <- c(id, cluster, paste0("num_", cluster), "props",
+      colnames(prop) <- c(id, cluster, paste0("num_", cluster), "prop",
                           supercluster, paste0("num_", supercluster))
 
       props <- rbind(props, prop)
@@ -2448,7 +2448,7 @@ get_props <- function(data, id, cluster, supercluster = NULL,
 
     # Left join and rename
     props <- merge(nums_cluster, prop, by = c("Var1", "Var2"))
-    colnames(props) <- c(id, cluster, paste0("num_", cluster), "props")
+    colnames(props) <- c(id, cluster, paste0("num_", cluster), "prop")
 
     props
   }
