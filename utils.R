@@ -1237,6 +1237,115 @@ my_vroom <- function(...) vroom::vroom(..., show_col_types = F, progress = F)
 
 my_vroom_write <- function(...) vroom::vroom_write(..., progress = F)
 
+my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
+                     sep = "\t", ...) {
+  #' Custom Fast File Reader with Column Selection and Filtering
+  #'
+  #' Reads a delimited file with options for selecting specific columns and filtering rows based on an expression.
+  #'
+  #' @param file_path A character string representing the path to the file to be read. Supports gz compressed files.
+  #' @param select_colnames A character vector of column names to be selected. If NULL, all columns are selected. Defaults to NULL.
+  #' @param filter_expr A character string representing a logical expression to filter rows. If NULL, no filtering is applied. Defaults to NULL.
+  #' @param sep A character string representing the column delimiter. Defaults to tab ("\t").
+  #' @param ... Additional arguments to be passed to `data.table::fread`.
+  #'
+  #' @return A data.table containing the selected columns and filtered rows from the input file.
+  #'
+  #' @details
+  #' This function reads a delimited file, optionally selecting specific columns and filtering rows based on a logical expression.
+  #' It supports gz compressed files and uses `awk` to efficiently process large files. The function first reads the column names
+  #' from the file header, validates the `select_colnames`, and constructs the appropriate `awk` commands for column selection and
+  #' row filtering. The final data is read into R using `data.table::fread`.
+  #'
+  #' @examples
+  #' \dontrun{
+  #' # Read a file with specific columns and a filter expression
+  #' data <- my_fread("data.txt", select_colnames = c("col1", "col3"),
+  #'                  filter_expr = "col2 > 10 & col4 == 'value'")
+  #'
+  #' # Read a gz compressed file
+  #' data <- my_fread("data.txt.gz")
+  #' }
+  #'
+  #' @export
+  colnames_from_expr <- function(chr_expr) {
+    pattern <- paste0("\\b(", paste(all_colnames, collapse = "|"), ")\\b")
+    matches <- gregexpr(pattern, chr_expr)
+    regmatches(chr_expr, matches)[[1]]
+  }
+
+  # Check if file exists and normalize path
+  if (!file.exists(file_path)) {
+    stop("File not found: ", file_path)
+  }
+  file_path <- normalizePath(file_path)
+
+  # Allow for gz compressed files
+  cmd <- if (grepl(".gz$", file_path)) {
+    paste0("zcat ", file_path)
+  } else {
+    paste0("cat ", file_path)
+  }
+
+  # Read in all colnames
+  header <- system(paste0(cmd, " | head -n 1"), intern = T)
+  all_colnames <- colnames(read.table(text = header, sep = sep, header = T))
+
+  # Check if select_colnames are valid
+  if (!is.null(select_colnames) && !all(select_colnames %in% all_colnames)) {
+    select_colnames <- paste(select_colnames[!select_colnames %in%
+                                               all_colnames],
+                             collapse = ", ")
+    stop(paste0("Some provided column names do not match the column names ",
+                "in ", file_path, ": ", select_colnames))
+  }
+
+  # Use all columns if select_colnames not provided
+  if (is.null(select_colnames)) {
+    select_colnames <- all_colnames
+  }
+
+  # Build awk filter condition if filter_expr provided
+  awk_filter <- ""
+  if (!is.null(filter_expr)) {
+    # Split filter_expr by '&' or '|'
+    split_expr <- strsplit(filter_expr, "\\s*(?=[&|])|(?<=[&|])\\s*",
+                           perl = T)[[1]]
+
+    # Get column names from each expression
+    filter_cols <- unique(unlist(lapply(split_expr, colnames_from_expr)))
+
+    # Ensure filter columns are included in the selection
+    select_colnames <- unique(union(select_colnames, filter_cols))
+
+    # Replace column names in filter_expr with corresponding awk indices
+    for (colname in filter_cols) {
+      col_index <- which(all_colnames == colname)
+      filter_expr <- gsub(colname, paste0("$", col_index), filter_expr,
+                          fixed = T)
+    }
+
+    # Conform AND and OR operator from R to awk
+    filter_expr <- gsub("&", "&&", filter_expr)
+    filter_expr <- gsub("\\|", "\\|\\|", filter_expr)
+
+    # Construct awk filter condition
+    awk_filter <- filter_expr
+  }
+
+  # Build the awk print statement
+  selected_indices <- which(all_colnames %in% select_colnames)
+  awk_col_select <- paste0("{print ", paste(paste0("$", selected_indices),
+                                            collapse = ", "), "}")
+
+  # Construct full awk command
+  cmd <- paste0(cmd, " | awk -F ", paste0("'", sep, "'"), " '", awk_filter, " ",
+                awk_col_select, "'")
+
+  # Read and process the file
+  data.table::fread(cmd = cmd, col.names = all_colnames[selected_indices], ...)
+}
+
 q <- function() quit(save = "no")
 
 voomByGroup <- function(counts, group = NULL, design = NULL, lib.size = NULL,
