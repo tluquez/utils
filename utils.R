@@ -1245,7 +1245,7 @@ my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
   #'
   #' @param file_path A character string representing the path to the file to be read. Supports gz compressed files.
   #' @param select_colnames A character vector of column names to be selected. If NULL, all columns are selected. Defaults to NULL.
-  #' @param filter_expr A character string representing a logical expression to filter rows. If NULL, no filtering is applied. Defaults to NULL.
+  #' @param filter_expr A character string representing a logical expression to filter rows. If NULL, no filtering is applied. If filtering using character values, make sure to quote it (e.g. `"column == 'value'"`). Defaults to NULL.
   #' @param sep A character string representing the column delimiter. Defaults to tab ("\t").
   #' @param ... Additional arguments to be passed to `data.table::fread`.
   #'
@@ -1268,10 +1268,24 @@ my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
   #' }
   #'
   #' @export
-  colnames_from_expr <- function(chr_expr) {
-    pattern <- paste0("\\b(", paste(all_colnames, collapse = "|"), ")\\b")
-    matches <- gregexpr(pattern, chr_expr)
-    regmatches(chr_expr, matches)[[1]]
+
+  column_from_expr <- function(chr_expr) {
+    # Split expression at logical operator other than & and |
+    split_chr_expr <- strsplit(
+      chr_expr, "\\s*==\\s*|\\s*!=\\s*|\\s*>\\s*|\\s*<\\s*"
+    )
+
+    # Trim trailing whitespaces
+    split_chr_expr <- trimws(unlist(split_chr_expr))
+
+    # Test if column is present in longer set of columns
+    col_in_all_colnames <- split_chr_expr[[1]] %in% all_colnames
+    if (col_in_all_colnames) {
+      return(split_chr_expr[[1]])
+    } else {
+      stop("Column ", paste0(split_chr_expr[[1]], collapse = ", "),
+           " not found.")
+    }
   }
 
   # Check if file exists and normalize path
@@ -1281,14 +1295,14 @@ my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
   file_path <- normalizePath(file_path)
 
   # Allow for gz compressed files
-  cmd <- if (grepl(".gz$", file_path)) {
+  cmd_base <- if (grepl(".gz$", file_path)) {
     paste0("zcat ", file_path)
   } else {
     paste0("cat ", file_path)
   }
 
   # Read in all colnames
-  header <- system(paste0(cmd, " | head -n 1"), intern = T)
+  header <- system(paste0(cmd_base, " | head -n 1"), intern = T)
   all_colnames <- colnames(read.table(text = header, sep = sep, header = T))
 
   # Check if select_colnames are valid
@@ -1309,14 +1323,15 @@ my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
   awk_filter <- ""
   if (!is.null(filter_expr)) {
     # Split filter_expr by '&' or '|'
-    split_expr <- strsplit(filter_expr, "\\s*(?=[&|])|(?<=[&|])\\s*",
-                           perl = T)[[1]]
+    split_expr <- trimws(unlist(strsplit(filter_expr, "\\s*&\\s*|\\s*\\|\\s*")))
 
     # Get column names from each expression
-    filter_cols <- unique(unlist(lapply(split_expr, colnames_from_expr)))
+    filter_cols <- unique(unlist(lapply(split_expr, column_from_expr)))
 
-    # Ensure filter columns are included in the selection
-    select_colnames <- unique(union(select_colnames, filter_cols))
+    if (!is.null(filter_cols)) {
+      # Ensure filter columns are included in the selection
+      select_colnames <- unique(union(select_colnames, filter_cols))
+    }
 
     # Replace column names in filter_expr with corresponding awk indices
     for (colname in filter_cols) {
@@ -1329,6 +1344,9 @@ my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
     filter_expr <- gsub("&", "&&", filter_expr)
     filter_expr <- gsub("\\|", "\\|\\|", filter_expr)
 
+    # Conform quotes
+    filter_expr <- gsub("'", "\"", filter_expr)
+
     # Construct awk filter condition
     awk_filter <- filter_expr
   }
@@ -1339,8 +1357,8 @@ my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
                                             collapse = ", "), "}")
 
   # Construct full awk command
-  cmd <- paste0(cmd, " | awk -F ", paste0("'", sep, "'"), " '", awk_filter, " ",
-                awk_col_select, "'")
+  cmd <- sprintf("%s | awk -F '%s' '%s %s'",
+                 cmd_base, sep, awk_filter, awk_col_select)
 
   # Read and process the file
   data.table::fread(cmd = cmd, col.names = all_colnames[selected_indices], ...)
