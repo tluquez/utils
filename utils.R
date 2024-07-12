@@ -1303,7 +1303,7 @@ my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
 
   # Read in all colnames
   header <- system(paste0(cmd_base, " | head -n 1"), intern = T)
-  all_colnames <- colnames(read.table(text = header, sep = sep, header = T))
+  all_colnames <- strsplit(header, sep)[[1]]
 
   # Check if select_colnames are valid
   if (!is.null(select_colnames) && !all(select_colnames %in% all_colnames)) {
