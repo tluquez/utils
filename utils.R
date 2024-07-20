@@ -2511,6 +2511,11 @@ get_props <- function(data, id, cluster, supercluster = T,
   if (!is.null(supercluster)) {
     required_cols <- c(required_cols, supercluster)
   }
+  missing_cols <- setdiff(required_cols, colnames(data))
+  if (length(missing_cols) > 0) {
+    stop(paste("The following columns are missing in the data: ",
+               paste(missing_cols, collapse = ", ")))
+  }
   invalid_args <- c(
     "id" = !is.character(id),
     "cluster" = !is.character(cluster),
