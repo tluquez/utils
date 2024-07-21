@@ -1245,7 +1245,11 @@ my_fread <- function(file_path, select_colnames = NULL, filter_expr = NULL,
   #'
   #' @param file_path A character string representing the path to the file to be read. Supports gz compressed files.
   #' @param select_colnames A character vector of column names to be selected. If NULL, all columns are selected. Defaults to NULL.
-  #' @param filter_expr A character string representing a logical expression to filter rows. If NULL, no filtering is applied. If filtering using character values, make sure to quote it (e.g. `"column == 'value'"`). Defaults to NULL.
+  #' @param filter_expr A character string representing a logical expression to
+  #' filter rows. If NULL, no filtering is applied. Not all filtering
+  #' expressions are supported. Only >, < and == and combinations of these with
+  #' and or or operators are supported. If filtering using character values,
+  #' make sure to quote it (e.g. `"column == 'value'"`). Defaults to NULL.
   #' @param sep A character string representing the column delimiter. Defaults to tab ("\t").
   #' @param ... Additional arguments to be passed to `data.table::fread`.
   #'
