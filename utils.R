@@ -1853,19 +1853,20 @@ de_pseudobulk <- function(input, meta, model, contrast, de_method = "limma",
         }
       )
 
-      # Fit
-      fit <- limma::lmFit(v, design_full)
-      if (!is.null(contrast_matrix)) {
-        fit %<>% limma::contrasts.fit(contrast_matrix)
-      }
+      # Fit and moderated statistics
+      fit <- limma::lmFit(v, design_full) %>%
+        limma::eBayes(trend = trend_bool, robust = trend_bool)
 
-      # Compute moderated statistics
-      fit %<>% limma::eBayes(trend = trend_bool, robust = trend_bool)
+      if (!is.null(contrast_matrix)) {
+        fit2 <- limma::contrasts.fit(fit, contrast_matrix) %>%
+          limma::eBayes(trend = trend_bool, robust = trend_bool)
+      }
 
       # Format output
       res <- limma::topTable(
-        fit, number = Inf, confint = T,
-        coef = if (is.null(contrast_matrix)) contrast else NULL
+        fit = if (is.null(contrast_matrix)) fit else fit2,
+        coef = if (is.null(contrast_matrix)) contrast else NULL,
+        number = Inf, confint = T
       )
 
       # Add standard errors for the coefficients
@@ -1880,18 +1881,19 @@ de_pseudobulk <- function(input, meta, model, contrast, de_method = "limma",
       }
 
       # Add voom plot
-      voom_xy_list <- purrr::imap(v$voom.xy, ~ tibble::tibble(
-        !!paste0("voom_plot_", .y, "_x") := .x$x,
-        !!paste0("voom_plot_", .y, "_y") := .x$y
-      ))
-      voom_line_list <- purrr::imap(v$voom.line, ~ tibble::tibble(
-        !!paste0("voom_line_", .y, "_x") := .x$x,
-        !!paste0("voom_line_", .y, "_y") := .x$y
-      ))
-      voom_plot <- dplyr::bind_cols(c(voom_xy_list,
-                                      voom_line_list)) %>%
+      voom_plot <- dplyr::bind_cols(
+        c(
+          purrr::imap(v$voom.xy, ~ tibble::tibble(
+            !!paste0("voom_plot_", .y, "_x") := .x$x,
+            !!paste0("voom_plot_", .y, "_y") := .x$y
+          )),
+          voom_line_list <- purrr::imap(v$voom.line, ~ tibble::tibble(
+            !!paste0("voom_line_", .y, "_x") := .x$x,
+            !!paste0("voom_line_", .y, "_y") := .x$y
+          ))
+        )
+      ) %>%
         dplyr::mutate(gene = names(v$voom.xy[[1]][["x"]]))
-      rm(voom_xy_list, voom_line_list)
 
       res %<>%
         tibble::rownames_to_column("gene") %>%
@@ -1923,7 +1925,14 @@ de_pseudobulk <- function(input, meta, model, contrast, de_method = "limma",
         dplyr::arrange(p.value)
 
       # Keep intermeadite files
-      list(res = res, interm = list(v = v, fit = fit))
+      list(
+        res = res,
+        interm = list(
+          v = v,
+          fit = if (is.null(contrast_matrix)) fit else list(fit = fit,
+                                                            fit2 = fit2)
+        )
+      )
     }, error = function(e) {
       message(e)
       list()
