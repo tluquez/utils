@@ -1714,29 +1714,32 @@ de_pseudobulk <- function(input, meta, model, contrast, de_method = "limma",
         stop(paste0("Contrast \"", contrast, "\" was not present in the model ",
                     "nor the full design with terms: ",
                     paste(colnames(design_full), collapse = ", "), "\n"))
-      } else if (de_method == "limma" && !is.null(contrast_matrix)) {
-        if (nrow(contrast_matrix) != ncol(design_full)) {
-          stop("Dimensions between the contrast and design matrices do not match.")
-        }
-      } else if (de_method == "edgeR") {
-        if (!contrast %in% colnames(meta)) {
-          stop(paste0("Contrast '", contrast, "' is not a column in the metadata."))
-        }
+      } else if (contrast %in% covs) {
+        is.categorical <- any(class(meta[, contrast]) %in%
+                                c("factor", "character"))
+        group_vec <- meta[, contrast]
+      } else if (contrast %in% colnames(design_full)) {
+        is.categorical <- length(unique(design_full[, contrast])) == 2
+        group_vec <- design_full[, contrast]
       }
     } else {
       stop("Contrast cannot be NULL.")
     }
 
-    # Check categorical or continuous contrast
-    if (contrast %in% covs) {
-      is.categorical <- class(meta[, contrast]) %in% c("factor", "character")
-      group_vec <- meta[, contrast]
-    } else if (contrast %in% colnames(design_full)) {
-      is.categorical <- length(unique(design_full[, contrast])) == 2
-      group_vec <- design_full[, contrast]
+    # Checks of argument congruency
+    if (de_method == "limma" && !is.null(contrast_matrix)) {
+      if (nrow(contrast_matrix) != ncol(design_full)) {
+        stop("Dimensions between the contrast and design matrices do not match.")
+      }
     }
-    if (!is.categorical & de_type == "voombygroup") {
-      message("voombygroup does not support continuous contrasts. Running voom instead.")
+    if (de_method == "edgeR") {
+      if (!contrast %in% colnames(meta)) {
+        stop(paste0("Contrast '", contrast, "' is not a column in the metadata."))
+      }
+    }
+    if (!is.categorical && de_type == "voombygroup") {
+      warning("voombygroup does not support continuous contrasts. ",
+              "Running voom instead.")
       de_type <- "voom"
     }
 
@@ -1881,19 +1884,27 @@ de_pseudobulk <- function(input, meta, model, contrast, de_method = "limma",
       }
 
       # Add voom plot
-      voom_plot <- dplyr::bind_cols(
-        c(
-          purrr::imap(v$voom.xy, ~ tibble::tibble(
-            !!paste0("voom_plot_", .y, "_x") := .x$x,
-            !!paste0("voom_plot_", .y, "_y") := .x$y
-          )),
-          voom_line_list <- purrr::imap(v$voom.line, ~ tibble::tibble(
-            !!paste0("voom_line_", .y, "_x") := .x$x,
-            !!paste0("voom_line_", .y, "_y") := .x$y
-          ))
-        )
-      ) %>%
-        dplyr::mutate(gene = names(v$voom.xy[[1]][["x"]]))
+      if (is.categorical) {
+        voom_plot <- dplyr::bind_cols(
+          c(
+            purrr::imap(v$voom.xy, ~ tibble::tibble(
+              !!paste0("voom_plot_", .y, "_x") := .x$x,
+              !!paste0("voom_plot_", .y, "_y") := .x$y
+            )),
+            voom_line_list <- purrr::imap(v$voom.line, ~ tibble::tibble(
+              !!paste0("voom_line_", .y, "_x") := .x$x,
+              !!paste0("voom_line_", .y, "_y") := .x$y
+            ))
+          )
+        ) %>%
+          dplyr::mutate(gene = names(v$voom.xy[[1]][["x"]]))
+      } else {
+        voom_plot <- dplyr::tibble(voom_plot_x = v$voom.xy[["x"]],
+                                   voom_plot_y = v$voom.xy[["y"]],
+                                   voom_line_x = v$voom.line[["x"]],
+                                   voom_line_y = v$voom.line[["y"]]) %>%
+          dplyr::mutate(gene = names(v$voom.xy[["x"]]))
+      }
 
       res %<>%
         tibble::rownames_to_column("gene") %>%
