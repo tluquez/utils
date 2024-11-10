@@ -1849,12 +1849,20 @@ de_pseudobulk <- function(input, meta, model, contrast, de_method = "limma",
         },
         voom = {
           trend_bool <- F
-          limma::voom(expr, design_full, save.plot = TRUE, lib.size = lib.size)
+          v <- limma::voom(expr, design_full, save.plot = T,
+                           lib.size = lib.size)
+          v$target <- lib.size
+          v$norm.factors <- norm.factors
+          v
         },
         voombygroup = {
           trend_bool <- F
-          voomByGroup(expr, design_full, save.plot = TRUE, plot = "combine",
-                      print = verbose, group = group_vec, lib.size = lib.size)
+          v <- voomByGroup(expr, design_full, save.plot = T, plot = "combine",
+                           print = verbose, group = group_vec,
+                           lib.size = lib.size)
+          v$target <- lib.size
+          v$norm.factors <- norm.factors
+          v
         }
       )
 
