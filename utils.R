@@ -128,9 +128,20 @@ filter_cell_types <- function(data, grouping_vars, min_n, min_pct, covs_n,
 }
 
 pycat_to_rfactor <- function(x) {
-  # Converts categorical variables saved in a python anndata to R vectors.
-  # x list. List of at least two arrays.
-  # https://github.com/scverse/anndata/blob/a96205c58738b7054d7ed663707c2fec6b52e31d/docs/fileformat-prose.rst#id11
+  #' Convert Python-style categorical data to R factor
+  #'
+  #' This function converts Python-style categorical data with a combination
+  #' of `categories` and `codes` into an R factor. \href{https://github.com/scverse/anndata/blob/a96205c58738b7054d7ed663707c2fec6b52e31d/docs/fileformat-prose.rst#id11}{Source}.
+  #'
+  #' @param x A list containing the categorical data. Expected to have elements
+  #'   `categories` and `codes` (numeric indices referring to the categories).
+  #' @return An R factor corresponding to the Python-style categorical data.
+  #' @examples
+  #' # Example input
+  #' pycat <- list(categories = c("A", "B", "C"), codes = c(0, 1, 2, 0, 1))
+  #' pycat_to_rfactor(pycat)
+  #' # [1] A B C A B
+  #' # Levels: A B C
 
   stopifnot(is.list(x))
 
@@ -154,9 +165,34 @@ pycat_to_rfactor <- function(x) {
   return(y)
 }
 
-get_h5ad_meta <- function(h5ad) {
-    # Extracts cell metadata from h5ad.
-    # h5ad character. Path to h5ad file.
+get_h5ad_meta <- function(h5ad, FactorsAsStrings = T) {
+  #' Extract Metadata from h5ad File
+  #'
+  #' This function reads an h5ad file and extracts cell metadata, handling
+  #' both SEA-AD and Scanpy formats. Metadata is returned as a `data.frame`,
+  #' with cell IDs as row names.
+  #'
+  #' @param h5ad A character string. The file path to the h5ad file.
+  #' @return A `data.frame` containing the cell metadata with cell IDs as
+  #'   row names. Columns correspond to metadata attributes from the h5ad file.
+  #' @details
+  #' The function supports both SEA-AD and Scanpy formats:
+  #' - For SEA-AD, categorical variables are converted to factors using the
+  #'   `__categories` attribute.
+  #' - For Scanpy, Python-style categorical data (`categories`, `codes`) are
+  #'   converted to R factors.
+  #'
+  #' The function validates the file format, ensures consistent cell IDs
+  #' and metadata columns, and replaces illegal column names.
+  #'
+  #' @examples
+  #' # Example usage:
+  #' metadata <- get_h5ad_meta("path/to/file.h5ad")
+  #' head(metadata)
+  #'
+  #' @seealso [pycat_to_rfactor()] for converting categorical data.
+  #' @export
+
     suppressPackageStartupMessages({
         library(tools)
         library(rhdf5)
@@ -167,46 +203,104 @@ get_h5ad_meta <- function(h5ad) {
     stopifnot(tools::file_ext(h5ad) == "h5ad")
 
     # Import obs and extract cell IDs
-    obs <- rhdf5::h5read(h5ad, "obs", read.attributes = T)
+    obs <- tryCatch({
+      rhdf5::h5read(h5ad, "obs", read.attributes = T)
+    }, error = function(e) {
+      stop("Error reading 'obs' from h5ad file: ", conditionMessage(e))
+    })
     rhdf5::h5closeAll()
+
+    # Extract cell IDs
+    if (!"_index" %in% names(attributes(obs))) {
+      stop("Missing '_index' attribute in 'obs'.")
+    }
     obs_i <- as.character(obs[[attributes(obs)[["_index"]]]])
 
-    # SEA-AD's format
+    # Handle SEA-AD's format
     if ("__categories" %in% names(obs)) {
-        cats <- names(obs)[names(obs) %in% names(obs[["__categories"]])]
-        cats <- structure(cats, names = cats)
-        cats <- purrr::map(cats, ~ factor(obs[[.x]],
-                                          labels = obs[["__categories"]][[.x]]))
-        num <- names(obs)[!names(obs) %in% names(obs[["__categories"]]) & names(obs) != "__categories"]
-        d <- c(cats, obs[num])
+      cats <- names(obs)[names(obs) %in% names(obs[["__categories"]])]
+      cats <- structure(cats, names = cats)
+      cats <- purrr::map(cats, ~ factor(obs[[.x]],
+                                        labels = obs[["__categories"]][[.x]]))
+      num <- names(obs)[!names(obs) %in% names(obs[["__categories"]]) &
+                          names(obs) != "__categories"]
+      d <- c(cats, obs[num])
     } else {
-        # Scanpy's format
-        valid_names <- c("categories", "codes", "mask", "values")
-        for (i in which(purrr::map_int(obs, purrr::vec_depth) == 3)) {
-            if (!sum(names(obs[[i]]) %in% valid_names) == 2) {
-                .y <- paste0(names(obs[i]), "/", names(obs[[i]]))
-                obs[i] <- unlist(obs[i], F, F)
-                names(obs)[i] <- .y
-                message("Illegal column names were replaced")
-            }
-        }
-        # Transform categories (length(.x) == 2) to factors
-        d <- purrr::modify_if(obs, .p = ~ length(.x) == 2, .f = ~ pycat_to_rfactor(.x))
+      # Handle Scanpy's format
+      valid_names <- c("categories", "codes", "mask", "values")
+      for (i in which(purrr::map_int(obs, purrr::vec_depth) == 3)) {
+          if (!sum(names(obs[[i]]) %in% valid_names) == 2) {
+              .y <- paste0(names(obs[i]), "/", names(obs[[i]]))
+              obs[i] <- unlist(obs[i], F, F)
+              names(obs)[i] <- .y
+              warning("Illegal column names were replaced")
+          }
+      }
+      # Transform categories (length(.x) == 2) to factors
+      d <- purrr::modify_if(obs, .p = ~ length(.x) == 2,
+                            .f = ~ pycat_to_rfactor(.x))
     }
 
-    # Enframe obs if all columns have length equal to ncells
-    if (purrr::every(d, ~ length(.x) == length(obs_i))) {
-        obs <- data.frame(d, check.names = F)[, attributes(obs)[["column-order"]]]
-        rownames(obs) <- obs_i
+    # Validate and enframe metadata
+    if (!purrr::every(d, ~ length(.x) == length(obs_i))) {
+      stop("Mismatch between cell metadata and cell IDs.")
     }
+    if (!"column-order" %in% names(attributes(obs))) {
+      stop("Missing 'column-order' attribute in 'obs'.")
+    }
+
+    obs <- tryCatch({
+      data.frame(d, check.names = F, stringsAsFactors = F)[
+        , attributes(obs)[["column-order"]]]
+    }, error = function(e) {
+      stop("Error constructing data frame from obs: ", conditionMessage(e))
+    })
+    rownames(obs) <- obs_i
+
+    # Convert factors to string
+    if (FactorsAsStrings) {
+      i <- sapply(obs, is.factor)
+      obs[i] <- lapply(obs[i], as.character)
+    }
+
     return(obs)
 }
 
 get_h5ad_expr <- function(h5ad, transpose = T, class = "H5SparseMatrix") {
-  # Extracts sparse matrix and cell metadata from h5ad.
-  # h5ad character. Path to h5ad file.
-  # transpose logical. Whether to transpose the cellsxgenes matrix to return genesxcells.
-  # class character. Either "sparseMatrix" or "H5SparseMatrix". The latter is useful for large matrices that need to be stored using bit64 (note, spam does not accept dimnames).
+  #' Extract Expression Matrix from h5ad File
+  #'
+  #' This function extracts the expression matrix from an h5ad file. It ensures
+  #' the row and column indices (e.g., gene names and cell IDs) are correctly
+  #' assigned, handling cases where the gene names may be stored as indices
+  #' or categorical variables.
+  #'
+  #' @param h5ad A character string. The file path to the h5ad file.
+  #' @param transpose logical. Whether to transpose the cell-by-gene matrix to
+  #' return gene-by-cell instead.
+  #' @param class character. Either "sparseMatrix" or "H5SparseMatrix". The
+  #' latter is useful for large matrices that need to be stored using bit64
+  #' (note, spam does not accept dimnames).
+  #' @return A `Matrix` object containing the expression data, with genes as rows
+  #'   and cells as columns. Row names represent gene names, and column names
+  #'   represent cell IDs.
+  #' @details
+  #' The function ensures robust handling of different storage formats:
+  #' - Gene names (`var`) can be stored as `_index`, `feature_name`, or
+  #'   `feature_names`.
+  #' - Handles categorical storage formats where gene names are represented as
+  #'   codes and categories.
+  #'
+  #' It uses the `rhdf5` package to efficiently read the h5ad file and close all
+  #' connections to avoid warnings or resource leaks.
+  #'
+  #' @examples
+  #' # Extract the expression matrix from an h5ad file
+  #' expr <- get_h5ad_expr("path/to/file.h5ad")
+  #' dim(expr)  # Check dimensions of the expression matrix
+  #'
+  #' @seealso [get_h5ad_meta()] for extracting metadata from h5ad files.
+  #' @export
+
   suppressPackageStartupMessages({
     library(tools)
     library(rhdf5)
@@ -216,26 +310,46 @@ get_h5ad_expr <- function(h5ad, transpose = T, class = "H5SparseMatrix") {
   stopifnot(file.exists(h5ad))
   stopifnot(tools::file_ext(h5ad) == "h5ad")
 
-  # Import row and column names
+  # Import cell names
   obs_attr <- rhdf5::h5readAttributes(h5ad, "obs")
-  obs_i <- rhdf5::h5read(h5ad, paste0("obs/", obs_attr[["_index"]]))
+  obs_i <- tryCatch({
+    if (!is.null(obs_attr[["_index"]])) {
+      rhdf5::h5read(h5ad, paste0("obs/", obs_attr[["_index"]]))
+    } else {
+      stop("Critical error: Missing '_index' attribute for obs.")
+    }
+  }, error = function(e) {
+    stop("Unable to load obs names: ", conditionMessage(e))
+    NULL
+  })
+
+  # Import gene names
   var_attr <- rhdf5::h5readAttributes(h5ad, "var")
-  # Import string or category var names
-  if (var_attr[["_index"]] == "_index") {
-    var_i <- rhdf5::h5read(h5ad, "var/_index")
-  } else if (var_attr[["_index"]] == "feature_name") {
-    var_i <- rhdf5::h5read(h5ad, "var/feature_name")
-    var_i <- var_i$categories[var_i$codes + 1]
-  }
+  var_i <- tryCatch({
+    if (!is.null(var_attr[["_index"]])) {
+      var_i_data <- rhdf5::h5read(h5ad, paste0("var/", var_attr[["_index"]]))
+
+      # Handle if the index is categorical
+      if (is.list(var_i_data) &&
+          all(c("codes", "categories") %in% names(var_i_data))) {
+        var_i_data$categories[var_i_data$codes + 1]
+      } else {
+        var_i_data
+      }
+    } else {
+      stop("Critical error: Missing '_index' attribute for obs.")
+    }
+  }, error = function(e) {
+    stop("Unable to load var names: ", conditionMessage(e))
+    NULL
+  })
   rhdf5::h5closeAll()
 
   # Import matrix
   if (class == "sparseMatrix") {
     suppressPackageStartupMessages(library(Matrix))
-    X <- rhdf5::h5read(h5ad, "X",
-      read.attributes = T,
-      bit64conversion = "bit64"
-    )
+    X <- rhdf5::h5read(h5ad, "X", read.attributes = T,
+                       bit64conversion = "bit64")
     rhdf5::h5closeAll()
     if (purrr::every(X, ~ class(.x) == "array")) {
       X <- purrr::modify_at(X, 1:3, as.numeric)
@@ -284,13 +398,14 @@ get_h5ad_expr <- function(h5ad, transpose = T, class = "H5SparseMatrix") {
   return(X)
 }
 
-get_h5ad <- function(h5ad, transpose = T, ...) {
+get_h5ad <- function(h5ad, transpose = T, class = "H5SparseMatrix",
+                     FactorsAsStrings = T) {
   # Extracts sparse matrix and cell metadata from h5ad.
   # h5ad character. Path to h5ad file.
   # transpose logical. Whether to transpose the cellsxgenes matrix to return genesxcells.
   # class character. Either "sparseMatrix" or "spam". The latter is useful for large matrices that need to be stored using bit64.
-  meta <- get_h5ad_meta(h5ad)
-  expr <- get_h5ad_expr(h5ad, ...)
+  meta <- get_h5ad_meta(h5ad, FactorsAsStrings = FactorsAsStrings)
+  expr <- get_h5ad_expr(h5ad, class = class)
   return(list(expr = expr, meta = meta))
 }
 
