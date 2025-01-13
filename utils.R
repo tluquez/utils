@@ -3336,4 +3336,10 @@ mat_to_flowset <- function(mat, markers, id, pheno=NULL){
   return(flowset)
 }
 
+logit2prob <- function(logit){
+  # Source: https://sebastiansauer.github.io/Rcode/logit2prob.R
+  odds <- exp(logit)
+  prob <- odds / (1 + odds)
+  return(prob)
+}
 #EOF
