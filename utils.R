@@ -3342,4 +3342,116 @@ logit2prob <- function(logit){
   prob <- odds / (1 + odds)
   return(prob)
 }
+
+list2tsv <- function(data, out_file, chunk_size = 2000, overwrite = F,
+                     compress = T, idcol = "id", sep = "\t", verbose = F) {
+  #' Save a List to a Tab-Delimited File
+  #'
+  #' This function saves a list of data frames to a tab-delimited file (TSV) in
+  #' chunks, with options to compress the output file, overwrite existing files,
+  #' and specify additional formatting details.
+  #'
+  #' @param data A list of data frames to be saved. Each element of the list must
+  #'   be a data frame or an object coercible to a data frame.
+  #' @param out_file A character string specifying the path of the output file
+  #'   (without the `.gz` extension if compression is enabled).
+  #' @param chunk_size An integer specifying the number of list elements to write
+  #'   in each chunk. Default is 2000.
+  #' @param overwrite A logical value indicating whether to overwrite an existing
+  #'   output file. Default is `FALSE`.
+  #' @param compress A logical value indicating whether to compress the output
+  #'   file using `pigz`. Default is `TRUE`.
+  #' @param idcol A character string specifying the column name to use for
+  #'   identifying the source list element in the output. Default is `"id"`.
+  #' @param sep A character string specifying the delimiter for the output file.
+  #'   Default is `"\t"`.
+  #' @param verbose A logical value indicating whether to enable verbose mode for
+  #'   `data.table::fwrite`. Default is `FALSE`.
+  #'
+  #' @return Returns `NULL` invisibly. The function writes the output file to disk.
+  #'
+  #' @details
+  #' The function splits the input list into chunks of size `chunk_size` and writes
+  #' each chunk sequentially to the specified file. Optionally, the resulting file
+  #' is compressed using the `pigz` command-line tool for efficient storage.
+  #'
+  #' If the output file already exists and `overwrite` is set to `FALSE`, the
+  #' function will stop with an error. If `overwrite` is `TRUE`, the existing file
+  #' will be removed.
+  #'
+  #' Compression with `pigz` requires that the `pigz` tool is installed and
+  #' available on the system path.
+  #'
+  #' @examples
+  #' # Example usage:
+  #' my_list <- list(
+  #'   data.frame(a = 1:5, b = 6:10),
+  #'   data.frame(a = 11:15, b = 16:20)
+  #' )
+  #' list2tsv(
+  #'   data = my_list,
+  #'   out_file = "output.tsv",
+  #'   chunk_size = 1,
+  #'   overwrite = TRUE,
+  #'   compress = TRUE
+  #' )
+  #'
+  #' @importFrom data.table rbindlist fwrite
+  #' @importFrom tictoc tic toc
+  #' @export list2tsv
+
+  # Ensure data is a list
+  if (!is.list(data)) stop("Data must be of class list.")
+
+  # Overwrite existing file
+  file_to_remove <- if (file.exists(paste0(out_file, ".gz"))) {
+    paste0(out_file, ".gz")
+  } else if (file.exists(out_file)) {
+    out_file
+  } else {
+    NULL
+  }
+  if (!is.null(file_to_remove)) {
+    if (!overwrite) stop("Output file already exists. Set overwrite = T.")
+    if (!file.remove(file_to_remove)) {
+      stop("Failed to overwrite existing output file.")
+    }
+  }
+
+  # Ensure output directory exists
+  output_dir <- dirname(out_file)
+  if (!dir.exists(output_dir)) stop("Output directory does not exist.")
+
+  # Split data into chunks
+  chunks <- split(1:length(data), ceiling(seq_along(data) / chunk_size))
+  message("Saving list in ", length(chunks), " chunks to ", out_file, "...")
+
+  # Write each chunk to the output file
+  for (i in seq_along(chunks)) {
+    indices <- chunks[[i]]
+    tryCatch({
+      tictoc::tic(paste("Chunk", i, "written successfully"))
+      # chunk_df <- collapse::unlist2d(data[indices], idcols = idcol, DT = T)
+      chunk_df <- data.table::rbindlist(data[indices], idcol = idcol, fill = T)
+      data.table::fwrite(chunk_df, out_file, sep = sep, append = T,
+                         col.names = (i == 1), verbose = verbose)
+      tictoc::toc()
+    }, error = function(e) {
+      message("Error in chunk ", i, ": ", e$message)
+    })
+  }
+
+  # Compress the output file with pigz if requested
+  if (compress) {
+    compressed_file <- paste0(out_file, ".gz")
+    message("Beginning compression as ", compressed_file)
+    try({
+      tictoc::tic(paste("Done compressing", compressed_file))
+      system(paste("pigz -9", out_file))
+      tictoc::toc()
+    })
+  }
+  return(invisible(NULL))
+}
+
 #EOF
