@@ -2750,7 +2750,8 @@ summarize_by_group <- function(data, group, columns = NULL) {
       dplyr::across(
         dplyr::all_of(columns),
         ~ {
-          if (is.numeric(.)) mean(., na.rm = TRUE)
+          if (all(is.na(.))) NA
+          else if (is.numeric(.)) mean(., na.rm = T)
           else if (is.factor(.)) levels(.)[1]
           else if (is.character(.)) unique(.)[which.max(table(.))]
           else if (is.logical(.)) unique(.)[which.max(table(.))]
@@ -2767,8 +2768,8 @@ summarize_by_group <- function(data, group, columns = NULL) {
   return(df)
 }
 
-get_props <- function(data, id, cluster, supercluster = T,
-                      add_supercluster_prop = NULL, add_other_cols = T) {
+get_props <- function(data, id, cluster, supercluster = NULL,
+                      add_supercluster_prop = F, add_other_cols = T) {
   #' Compute Proportions
   #'
   #' This function computes proportions per id across cluster. It can group by
@@ -2799,13 +2800,14 @@ get_props <- function(data, id, cluster, supercluster = T,
   #' reference levels for factor columns, and the mode for character columns.
   #'
   #' @examples
-  #' df <- data.frame(id = rep(1:3, each = 4),
-  #'                  cluster = rep(c("a", "b"), each = 2, times = 3),
-  #'                  supercluster = "A",
-  #'                  value1 = runif(12),
+  #' df <- data.frame(id = rep(1:3, each = 8),
+  #'                  cluster = rep(c("C1", "C2"), each = 4, times = 3),
+  #'                  supercluster = rep(c("S1", "S2"), each = 4, times = 3),
+  #'                  value1 = runif(24),
   #'                  value2 = as.factor(LETTERS[1:12]),
   #'                  value3 = LETTERS[1:12],
   #'                  value4 = NA)
+  #' df
   #' get_props(df, "id", "cluster", "supercluster", add_supercluster_prop = T)
   #' get_props(df, "id", "cluster", "supercluster")
   #' get_props(df, "id", "cluster")
@@ -2820,6 +2822,14 @@ get_props <- function(data, id, cluster, supercluster = T,
     stop("Input 'data' must be a data frame.")
   }
 
+  df <- data.frame(id = rep(1:3, each = 8),
+                   cluster = rep(c("C1", "C2"), each = 4, times = 3),
+                   supercluster = rep(c("S1", "S2"), each = 4, times = 3),
+                   value1 = runif(24),
+                   value2 = as.factor(LETTERS[1:12]),
+                   value3 = LETTERS[1:12],
+                   value4 = NA)
+
   # Input Validation
   required_cols <- c(id, cluster)
   if (!is.null(supercluster)) {
@@ -2827,8 +2837,8 @@ get_props <- function(data, id, cluster, supercluster = T,
   }
   missing_cols <- setdiff(required_cols, colnames(data))
   if (length(missing_cols) > 0) {
-    stop(paste("The following columns are missing in the data: ",
-               paste(missing_cols, collapse = ", ")))
+    stop("The following columns are missing in the data: ",
+         paste(missing_cols, collapse = ", "))
   }
   invalid_args <- c(
     "id" = !is.character(id),
@@ -2837,8 +2847,8 @@ get_props <- function(data, id, cluster, supercluster = T,
   )
   invalid_args <- names(invalid_args)[invalid_args]
   if (length(invalid_args) > 0) {
-    stop(paste("Argument(s) ", paste(invalid_args, collapse = ", "),
-               " must be character vector(s)."))
+    stop("Argument(s) ", paste(invalid_args, collapse = ", "),
+         " must be character vector(s).")
   }
 
   # Proportion Calculation
@@ -2861,7 +2871,7 @@ get_props <- function(data, id, cluster, supercluster = T,
       colnames(prop) <- c(id, cluster, paste0("num_", cluster), "prop",
                            supercluster, paste0("num_", supercluster))
 
-      prop
+      return(prop)
     })
     props <- do.call(rbind, props)
     rownames(props) <- NULL
@@ -2892,14 +2902,14 @@ get_props <- function(data, id, cluster, supercluster = T,
     prop <- as.data.frame(prop.table(nums_cluster, margin = 1))
     nums_cluster <- as.data.frame(nums_cluster)
 
-    # Left join and rename
+    # Merge and clean column names
     props <- merge(nums_cluster, prop, by = c("Var1", "Var2"))
     colnames(props) <- c(id, cluster, paste0("num_", cluster), "prop")
 
     props
   }
 
-  # Ensure column types conform to data
+  # Ensure column types conform to original data
   props[[id]] <- as(props[[id]], class(data[[id]]))
   props[[cluster]] <- as(props[[cluster]], class(data[[cluster]]))
   if (!is.null(supercluster)) {
