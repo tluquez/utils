@@ -3022,11 +3022,6 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
   # Extract the response variable values
   prop <- data[[y]]
 
-  # Set up the progressor progress bar
-  if (!is.null(p) && inherits(p, "progressor")) {
-    p()
-  }
-
   # Check for collinear terms
   x <- model.matrix(formula, data)
   ncovs <- ncol(x)
@@ -3084,6 +3079,11 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
 
   # Add class robust_glm
   class(fit) <- c(class(fit), "robust_glm")
+
+  # Step forward the progressor bar
+  if (!is.null(p) && inherits(p, "progressor")) {
+    p()
+  }
 
   return(fit)
 }
