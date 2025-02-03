@@ -3081,9 +3081,7 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
   class(fit) <- c(class(fit), "robust_glm")
 
   # Step forward the progressor bar
-  if (!is.null(p) && inherits(p, "progressor")) {
-    p()
-  }
+  if (!is.null(p) && inherits(p, "progressor")) p()
 
   return(fit)
 }
@@ -3462,6 +3460,51 @@ list2tsv <- function(data, out_file, chunk_size = 2000, overwrite = F,
     })
   }
   return(invisible(NULL))
+}
+
+mcsaveRDS <- function(object, file,
+                      mc.cores = min(parallel::detectCores(), 4)) {
+  #' Source: https://github.com/traversc/trqwe/blob/dcf57673ca308dd8d1889d1621b6976b78e4bd26/R/my_functions.r#L779
+  #' Multi-threaded saveRDS
+  #' @description Uses the pigz utility to improve saving large R objects.  This is compatible with saveRDS and readRDS functions.  Requires pigz (sudo apt-get install pigz on Ubuntu).
+  #' @param object An r object to save.
+  #' @param file The filename to save to.
+  #' @param mc.cores How many cores to use in pigz.  The program does not seem to benefit after more than about 4 cores.
+  #' @examples
+  #' x <- sample(1e4, 1e7, replace=T)
+  #' y <- sample(1e4, 1e7, replace=T)
+  #' microbenchmark(mcsaveRDS(x, file="temp.Rds"), saveRDS(y, file="temp2.Rds")
+  #'
+  #' Unit: seconds
+  #'                             expr      min       lq     mean   median       uq
+  #'  mcsaveRDS(x, file = "temp.Rds") 1.908310 1.908310 1.908310 1.908310 1.908310
+  #'   saveRDS(y, file = "temp2.Rds") 6.271499 6.271499 6.271499 6.271499 6.271499
+  #' @seealso
+  #' \url{http://stackoverflow.com/questions/28927750/}
+  #' @export
+  con <- pipe(paste0("pigz -p", mc.cores, " > ", file), "wb")
+  saveRDS(object, file = con)
+  close(con)
+}
+
+mcreadRDS <- function(file, mc.cores = min(parallel::detectCores(), 4)) {
+  #' Source: https://github.com/traversc/trqwe/blob/dcf57673ca308dd8d1889d1621b6976b78e4bd26/R/my_functions.r#L797
+  #' Multi-threaded readRDS
+  #' @description Uses the pigz utility to improve loading large R objects.  This is compatible with saveRDS and readRDS functions.  Requires pigz (sudo apt-get install pigz on Ubuntu).
+  #' @param file The filename of the rds object.
+  #' @param mc.cores How many cores to use in pigz.  The program does not seem to benefit after more than about 4 cores.
+  #' @return The R object.
+  #' @examples
+  #' x <- sample(1e4, 1e7, replace=T)
+  #' saveRDS(x, file="temp.Rds")
+  #' xmc <- mcreadRDS("temp.Rds")
+  #' @seealso
+  #' \url{http://stackoverflow.com/questions/28927750/}
+  #' @export
+  con <- pipe(paste0("pigz -d -c -p", mc.cores, " ", file))
+  object <- readRDS(file = con)
+  close(con)
+  return(object)
 }
 
 #EOF
