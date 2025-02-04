@@ -3351,47 +3351,41 @@ logit2prob <- function(logit){
   return(prob)
 }
 
-list2tsv <- function(data, out_file, chunk_size = 2000, overwrite = F,
-                     compress = T, idcol = "id", sep = "\t", verbose = F) {
+list2tsv <- function(data, out_file, chunk_size = 2000, append = F,
+                     idcol = "id", sep = "\t", verbose = F) {
   #' Save a List to a Tab-Delimited File
   #'
-  #' This function saves a list of data frames to a tab-delimited file (TSV) in
-  #' chunks, with options to compress the output file, overwrite existing files,
-  #' and specify additional formatting details.
+  #' This function saves a list of data frames to a tab-separated values (TSV) file
+  #' in chunks, with options to overwrite, append, and compress the output.
   #'
-  #' @param data A list of data frames to be saved. Each element of the list must
-  #'   be a data frame or an object coercible to a data frame.
-  #' @param out_file A character string specifying the path of the output file
-  #'   (without the `.gz` extension if compression is enabled).
-  #' @param chunk_size An integer specifying the number of list elements to write
-  #'   in each chunk. Default is 2000.
-  #' @param overwrite A logical value indicating whether to overwrite an existing
-  #'   output file. Default is `FALSE`.
-  #' @param compress A logical value indicating whether to compress the output
-  #'   file using `pigz`. Default is `TRUE`.
-  #' @param idcol A character string specifying the column name to use for
-  #'   identifying the source list element in the output. Default is `"id"`.
-  #' @param sep A character string specifying the delimiter for the output file.
-  #'   Default is `"\t"`.
-  #' @param verbose A logical value indicating whether to enable verbose mode for
-  #'   `data.table::fwrite`. Default is `FALSE`.
+  #' @param data A list of data frames to be saved. Each element must be a data frame
+  #'   or coercible to a data frame.
+  #' @param out_file A character string specifying the output file path. If compression
+  #'   is enabled (`.gz` extension), the function handles it automatically.
+  #' @param chunk_size An integer specifying how many list elements to write per chunk.
+  #'   Default is 2000.
+  #' @param append Logical. If `TRUE`, appends to an existing file. If `FALSE`
+  #'   overwrite existing file. In both cases, if the file does not exist a new
+  #'   file is created. Default is `TRUE`.
+  #' @param idcol A character string for the column name used to identify the source
+  #'   list element in the output. Default is `"id"`.
+  #' @param sep A character string specifying the delimiter. Default is `"\t"` (tab).
+  #' @param verbose Logical. If `TRUE`, prints progress messages and uses `tictoc`
+  #'   for timing output. Default is `FALSE`.
   #'
-  #' @return Returns `NULL` invisibly. The function writes the output file to disk.
+  #' @return Invisibly returns `NULL`. The function writes output to disk.
   #'
   #' @details
-  #' The function splits the input list into chunks of size `chunk_size` and writes
-  #' each chunk sequentially to the specified file. Optionally, the resulting file
-  #' is compressed using the `pigz` command-line tool for efficient storage.
+  #' The function processes the input list in chunks of size `chunk_size`, writing each
+  #' chunk sequentially to the specified file. If the output file exists:
+  #' - If `overwrite = TRUE`, the file is deleted and replaced.
+  #' - If `append = TRUE`, data is appended.
+  #' - If neither `overwrite` nor `append` is `TRUE`, an error is raised.
   #'
-  #' If the output file already exists and `overwrite` is set to `FALSE`, the
-  #' function will stop with an error. If `overwrite` is `TRUE`, the existing file
-  #' will be removed.
-  #'
-  #' Compression with `pigz` requires that the `pigz` tool is installed and
-  #' available on the system path.
+  #' If `out_file` has a `.gz` extension, the function automatically compresses
+  #' the file using `pigz`, which must be installed and available in the system path.
   #'
   #' @examples
-  #' # Example usage:
   #' my_list <- list(
   #'   data.frame(a = 1:5, b = 6:10),
   #'   data.frame(a = 11:15, b = 16:20)
@@ -3400,8 +3394,7 @@ list2tsv <- function(data, out_file, chunk_size = 2000, overwrite = F,
   #'   data = my_list,
   #'   out_file = "output.tsv",
   #'   chunk_size = 1,
-  #'   overwrite = TRUE,
-  #'   compress = TRUE
+  #'   overwrite = TRUE
   #' )
   #'
   #' @importFrom data.table rbindlist fwrite
@@ -3411,39 +3404,52 @@ list2tsv <- function(data, out_file, chunk_size = 2000, overwrite = F,
   # Ensure data is a list
   if (!is.list(data)) stop("Data must be of class list.")
 
-  # Overwrite existing file
-  file_to_remove <- if (file.exists(paste0(out_file, ".gz"))) {
-    paste0(out_file, ".gz")
-  } else if (file.exists(out_file)) {
-    out_file
-  } else {
-    NULL
-  }
-  if (!is.null(file_to_remove)) {
-    if (!overwrite) stop("Output file already exists. Set overwrite = T.")
-    if (!file.remove(file_to_remove)) {
-      stop("Failed to overwrite existing output file.")
-    }
-  }
+  # Detect compression based on file extension
+  compress <- grepl("\\.gz$", out_file)
+  uncompressed_file <- if (compress) sub("\\.gz$", "", out_file) else out_file
 
   # Ensure output directory exists
   output_dir <- dirname(out_file)
-  if (!dir.exists(output_dir)) stop("Output directory does not exist.")
+  if (!dir.exists(output_dir) && !dir.create(output_dir, recursive = T)) {
+    stop("Failed to create output directory: ", output_dir)
+  }
+
+  # Handle overwriting
+  existing_compressed <- compress && file.exists(out_file)
+  existing_uncompressed <- file.exists(uncompressed_file)
+
+  # Overwrite
+  if (!append) {
+    if (existing_compressed) file.remove(out_file)
+    if (existing_uncompressed) file.remove(uncompressed_file)
+  }
+
+  # Append
+  if (append && existing_compressed) {
+    if (verbose) message("Decompressing existing file: ", out_file)
+    if (Sys.which("pigz") == "") {
+      stop("Error: 'pigz' is not installed on your system.")
+    }
+    system2("pigz", c("-d", "-f", out_file))
+  }
 
   # Split data into chunks
-  chunks <- split(1:length(data), ceiling(seq_along(data) / chunk_size))
-  message("Saving list in ", length(chunks), " chunks to ", out_file, "...")
+  chunks <- split(seq_along(data), ceiling(seq_along(data) / chunk_size))
+  if (verbose) message("Saving list in ", length(chunks), " chunks to ",
+                       out_file, "...")
 
   # Write each chunk to the output file
   for (i in seq_along(chunks)) {
     indices <- chunks[[i]]
     tryCatch({
-      tictoc::tic(paste("Chunk", i, "written successfully"))
+      if (verbose) tictoc::tic(paste("Chunk", i, "written successfully"))
+
       # chunk_df <- collapse::unlist2d(data[indices], idcols = idcol, DT = T)
       chunk_df <- data.table::rbindlist(data[indices], idcol = idcol, fill = T)
-      data.table::fwrite(chunk_df, out_file, sep = sep, append = T,
+      data.table::fwrite(chunk_df, uncompressed_file, sep = sep, append = T,
                          col.names = (i == 1), verbose = verbose)
-      tictoc::toc()
+
+      if (verbose) tictoc::toc()
     }, error = function(e) {
       message("Error in chunk ", i, ": ", e$message)
     })
@@ -3451,25 +3457,33 @@ list2tsv <- function(data, out_file, chunk_size = 2000, overwrite = F,
 
   # Compress the output file with pigz if requested
   if (compress) {
-    compressed_file <- paste0(out_file, ".gz")
-    message("Beginning compression as ", compressed_file)
-    try({
-      tictoc::tic(paste("Done compressing", compressed_file))
-      system(paste("pigz -9", out_file))
-      tictoc::toc()
-    })
+    if (Sys.which("pigz") == "") stop("pigz is not available on your system.")
+
+    if (verbose) message("Compressing ", uncompressed_file)
+    if (verbose) tictoc::tic(paste("Compressing", out_file))
+
+    result <- if (file.exists(uncompressed_file)) {
+      system2("pigz", c("-9", uncompressed_file), stdout = T, stderr = T)
+    }
+
+    if (length(result) > 0) {
+      stop("Compression error: ", paste(result, collapse = "\n"))
+    }
+
+    if (verbose) tictoc::toc()
   }
+
   return(invisible(NULL))
 }
 
 mcsaveRDS <- function(object, file,
-                      mc.cores = min(parallel::detectCores(), 4)) {
+                      nthreads = min(parallel::detectCores(), 4)) {
   #' Source: https://github.com/traversc/trqwe/blob/dcf57673ca308dd8d1889d1621b6976b78e4bd26/R/my_functions.r#L779
   #' Multi-threaded saveRDS
   #' @description Uses the pigz utility to improve saving large R objects.  This is compatible with saveRDS and readRDS functions.  Requires pigz (sudo apt-get install pigz on Ubuntu).
   #' @param object An r object to save.
   #' @param file The filename to save to.
-  #' @param mc.cores How many cores to use in pigz.  The program does not seem to benefit after more than about 4 cores.
+  #' @param nthreads How many cores to use in pigz.  The program does not seem to benefit after more than about 4 cores.
   #' @examples
   #' x <- sample(1e4, 1e7, replace=T)
   #' y <- sample(1e4, 1e7, replace=T)
@@ -3482,17 +3496,17 @@ mcsaveRDS <- function(object, file,
   #' @seealso
   #' \url{http://stackoverflow.com/questions/28927750/}
   #' @export
-  con <- pipe(paste0("pigz -p", mc.cores, " > ", file), "wb")
+  con <- pipe(paste0("pigz -p", nthreads, " > ", file), "wb")
   saveRDS(object, file = con)
   close(con)
 }
 
-mcreadRDS <- function(file, mc.cores = min(parallel::detectCores(), 4)) {
+mcreadRDS <- function(file, nthreads = min(parallel::detectCores(), 4)) {
   #' Source: https://github.com/traversc/trqwe/blob/dcf57673ca308dd8d1889d1621b6976b78e4bd26/R/my_functions.r#L797
   #' Multi-threaded readRDS
   #' @description Uses the pigz utility to improve loading large R objects.  This is compatible with saveRDS and readRDS functions.  Requires pigz (sudo apt-get install pigz on Ubuntu).
   #' @param file The filename of the rds object.
-  #' @param mc.cores How many cores to use in pigz.  The program does not seem to benefit after more than about 4 cores.
+  #' @param nthreads How many cores to use in pigz.  The program does not seem to benefit after more than about 4 cores.
   #' @return The R object.
   #' @examples
   #' x <- sample(1e4, 1e7, replace=T)
@@ -3501,7 +3515,7 @@ mcreadRDS <- function(file, mc.cores = min(parallel::detectCores(), 4)) {
   #' @seealso
   #' \url{http://stackoverflow.com/questions/28927750/}
   #' @export
-  con <- pipe(paste0("pigz -d -c -p", mc.cores, " ", file))
+  con <- pipe(paste0("pigz -d -c -p", nthreads, " ", file))
   object <- readRDS(file = con)
   close(con)
   return(object)
