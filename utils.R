@@ -2822,14 +2822,6 @@ get_props <- function(data, id, cluster, supercluster = NULL,
     stop("Input 'data' must be a data frame.")
   }
 
-  df <- data.frame(id = rep(1:3, each = 8),
-                   cluster = rep(c("C1", "C2"), each = 4, times = 3),
-                   supercluster = rep(c("S1", "S2"), each = 4, times = 3),
-                   value1 = runif(24),
-                   value2 = as.factor(LETTERS[1:12]),
-                   value3 = LETTERS[1:12],
-                   value4 = NA)
-
   # Input Validation
   required_cols <- c(id, cluster)
   if (!is.null(supercluster)) {
