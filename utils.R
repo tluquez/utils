@@ -3513,4 +3513,65 @@ mcreadRDS <- function(file, nthreads = min(parallel::detectCores(), 4)) {
   return(object)
 }
 
+dynamic_facet_breaks <- function(limits, n = 2) {
+  #' Generate Dynamic Breaks for Faceted ggplot2 Y-Axis
+  #'
+  #' Computes dynamic y-axis breaks for facetted `ggplot2` plots with `scales = "free_y"`.
+  #' Ensures at least two breaks per facet while applying `ggplot2`-style rounding and
+  #' preventing breaks from being directly on axis limits.
+  #'
+  #' @param limits A numeric vector of length 2 specifying the lower and upper y-axis limits.
+  #' @param n An integer specifying the desired number of breaks. Defaults to 3.
+  #'
+  #' @return A numeric vector of break points for the y-axis, or `NULL` if limits are invalid.
+  #'
+  #' @details
+  #' - If `limits` contains `NA` or `Inf`, the function returns `NULL` to let `ggplot2` decide.
+  #' - If `limits[1] == limits[2]`, a small artificial range is added to avoid single-value breaks.
+  #' - Breaks are computed using `scales::extended_breaks()` for ggplot-compatible rounding.
+  #' - Trimming is dynamically adjusted to avoid placing breaks at exact axis limits.
+  #'
+  #' @examples
+  #' library(ggplot2)
+  #'
+  #' # Example data
+  #' df <- data.frame(
+  #'   x = rep(1:10, 3),
+  #'   y = c(runif(10, 0, 5), runif(10, 10, 15), runif(10, 50, 100)),
+  #'   group = rep(c("A", "B", "C"), each = 10)
+  #' )
+  #'
+  #' # ggplot with dynamic facet breaks
+  #' ggplot(df, aes(x, y)) +
+  #'   geom_point() +
+  #'   facet_wrap(~group, scales = "free_y") +
+  #'   scale_y_continuous(breaks = dynamic_facet_breaks)
+  #'
+  #' @importFrom scales extended_breaks
+  #' @export
+  if (!is.numeric(limits) || length(limits) != 2 || any(is.na(limits)) || any(is.infinite(limits))) {
+    return(NULL)  # Return NULL if limits are invalid
+  }
+
+  range <- limits[2] - limits[1]
+  if (range == 0) {
+    # Handle case where all values are the same by expanding range slightly
+    return(c(limits[1] - 1, limits[1] + 1))
+  }
+
+  # Adjust trimming dynamically based on range size
+  trim_factor <- max(0.01, min(0.05, 1 / range))  # Prevent over-trimming
+  lower <- limits[1] + trim_factor * range
+  upper <- limits[2] - trim_factor * range
+
+  # Compute breaks using ggplot2-style rounding
+  breaks <- scales::extended_breaks(n = n)(c(lower, upper))
+
+  # Ensure at least two unique breaks
+  if (length(unique(breaks)) < 2) {
+    return(scales::extended_breaks(n = 2)(limits))
+  }
+
+  return(breaks)
+}
 #EOF
