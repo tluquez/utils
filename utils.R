@@ -2994,6 +2994,7 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
   # Subset data
   if (!is.null(subset)) {
     data <- subset(data, eval(parse(text = subset)))
+    data <- droplevels(data)
   }
 
   # Extract model terms
@@ -3574,4 +3575,10 @@ dynamic_facet_breaks <- function(limits, n = 2) {
 
   return(breaks)
 }
+
+my_qsave <- function(...) qs::qsave(...,
+                                    nthreads = parallelly::availableCores())
+my_qread <- function(...) qs::qread(...,
+                                    nthreads = parallelly::availableCores())
+
 #EOF
