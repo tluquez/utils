@@ -3036,7 +3036,7 @@ combine_pdfs <- function(dir, output, pattern = ".*\\.pdf", dry_run = FALSE) {
     return(invisible(NULL))
   }
 
-  if (!all(tools::file_ext(l) == "pdf")) {
+  if (!all(tools::file_ext(pdf_files) == "pdf")) {
     stop("At least one file does not end with th eextension '.pdf'.")
   }
 
@@ -3051,7 +3051,6 @@ combine_pdfs <- function(dir, output, pattern = ".*\\.pdf", dry_run = FALSE) {
 
   # Remove temporary files
   invisible(file.remove(pdf_files))
-  message("Deleted temporary files.")
 
   return(invisible(NULL))
 }
