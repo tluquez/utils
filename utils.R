@@ -3002,7 +3002,8 @@ get_response <- robustglm::get_response
 
 get_covs <- robustglm::get_covs
 
-combine_pdfs <- function(dir, output, pattern = ".*\\.pdf", dry_run = FALSE) {
+combine_pdfs <- function(dir, output, pattern = ".*\\.pdf", dry_run = FALSE,
+                         batch_size = 100) {
   #' Merge and Clean Up PDF Files
   #'
   #' Combines all matching PDF files in a given directory into a single output file,
@@ -3012,6 +3013,7 @@ combine_pdfs <- function(dir, output, pattern = ".*\\.pdf", dry_run = FALSE) {
   #' @param output Path to the output PDF file.
   #' @param pattern Regex pattern to match files (default: "temp_.*\\.pdf").
   #' @param dry_run If TRUE, lists files to be combined but does not modify anything.
+  #' @param batch_size Number of files to process at a time. Useful to prevent exceding system limit of open file handles.
   #'
   #' @return Invisible NULL. Performs the operation without returning a value.
   #'
@@ -3019,18 +3021,13 @@ combine_pdfs <- function(dir, output, pattern = ".*\\.pdf", dry_run = FALSE) {
   #' @importFrom fs path file_exists
   #' @export
 
-  # Check if qpdf is installed
   if (!requireNamespace("qpdf", quietly = TRUE)) {
     stop("Package 'qpdf' is required. Install it with install.packages('qpdf').")
   }
 
-  # Normalize directory path
   dir <- fs::path(dir)
-
-  # Find matching files
   pdf_files <- list.files(path = dir, full.names = TRUE, pattern = pattern)
 
-  # Check if there are files to process
   if (length(pdf_files) == 0) {
     message("No matching PDF files found. Nothing to merge.")
     return(invisible(NULL))
@@ -3041,17 +3038,25 @@ combine_pdfs <- function(dir, output, pattern = ".*\\.pdf", dry_run = FALSE) {
   }
 
   if (dry_run) {
-    # Show the files
     return(pdf_files)
   }
 
-  # Combine files
-  qpdf::pdf_combine(pdf_files, output)
+  # Break files into batches
+  batches <- split(pdf_files, ceiling(seq_along(pdf_files) / batch_size))
+  temp_files <- character(length(batches))
+
+  for (i in seq_along(batches)) {
+    temp_output <- file.path(tempdir(), paste0("batch_", i, ".pdf"))
+    qpdf::pdf_combine(batches[[i]], temp_output)
+    temp_files[i] <- temp_output
+  }
+
+  # Final merge
+  qpdf::pdf_combine(temp_files, output)
   message("Merged PDFs into: ", output)
 
-  # Remove temporary files
+  # Clean up
   invisible(file.remove(pdf_files))
-
-  return(invisible(NULL))
 }
+
 #EOF
