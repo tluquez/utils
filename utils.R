@@ -999,10 +999,7 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
           tidyr::pivot_wider(
             names_from = !!rlang::sym(study_col),
             values_from = -!!rlang::sym(study_col),
-            names_glue = paste0(
-              "original_{", study_col,
-              "}_{.value}"
-            )
+            names_glue = paste0("original_{", study_col, "}_{.value}")
           )
       )
     ) %>%
@@ -1023,15 +1020,15 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
 
   # Get diagnostics
   tictoc::tic("Running leave one out")
-  res %<>%
+  res %>%
     dplyr::mutate(
       purrr::map_dfr(
         rma,
         ~ tryCatch(
           {
             metafor::leave1out(.x) %>%
-              tibble::as_tibble() %>%
-              dplyr::bind_cols("{study_col}" := .x$slab) %>%
+              as.data.frame() %>%
+              tibble::rownames_to_column(study_col) %>%
               tidyr::pivot_wider(
                 names_from = !!rlang::sym(study_col),
                 values_from = -!!rlang::sym(study_col),
