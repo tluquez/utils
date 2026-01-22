@@ -806,24 +806,53 @@ influence_to_df <- function(x) {
   )
 }
 
-rma_with_restart <- function(data, type = "RE", yi_col = "log_fc",
-                             sei_col = "lfcse", slab = NULL) {
+rma_with_restart <- function(data, type = NULL, yi_col = "log_fc",
+                             sei_col = "lfcse", slab = NULL,
+                             restart_plan = NULL) {
   #' Perform Meta-Analysis with Restart Logic
   #'
-  #' This function performs meta-analysis with restart logic based on specified models and tests.
+  #' This function performs meta-analysis with restart logic based on
+  #' specified models and tests.
   #'
-  #' @param data A data frame containing the relevant variables for the meta-analysis.
-  #' @param type A character string specifying the type of meta-analysis.
-  #'   Options include "RE" for random effects, "REHSK" for random effects with Hedges' g,
-  #'   and "FE" for fixed effects. Default is "RE".
-  #' @param yi_col A character string specifying the column name in \code{data} containing
-  #'   the effect sizes (yi) for the meta-analysis. Default is "log_fc".
-  #' @param sei_col A character string specifying the column name in \code{data} containing
-  #'   the standard errors of the effect sizes (sei) for the meta-analysis. Default is "lfcse".
-  #' @slab optional vector with labels for the k studies
+  #' @param data A data frame containing the relevant variables for the
+  #' meta-analysis.
   #'
-  #' @return A data frame containing the meta-analysis results, including effect size estimates,
-  #'   standard errors, and additional information about the optimization process.
+  #' @param type Character string selecting a preset restart plan.
+  #' Must be one of \code{"RE"}, \code{"REHSK"}, or \code{"FE"}. Exactly one
+  #' of \code{type} or \code{restart_plan} must be specified. Defaults to
+  #' \code{NULL}.
+  #'
+  #' @param yi_col A character string specifying the column name in
+  #' \code{data} containing the effect sizes (yi) for the meta-analysis.
+  #' Default is "log_fc".
+  #'
+  #' @param sei_col A character string specifying the column name in
+  #' \code{data} containing the standard errors of the effect sizes (sei) for
+  #' the meta-analysis. Default is "lfcse".
+  #'
+  #' @param slab Optional vector with labels for the k studies
+  #'
+  #' @param restart_plan Optional list defining a custom restart strategy for
+  #' model fitting. If \code{NULL} (default), a preset restart plan is
+  #' selected based on \code{type}. A restart plan must be a list of named
+  #' lists, where each inner list specifies arguments passed to
+  #' \code{metafor::rma()} and represents one optimization attempt. Each
+  #' attempt may include:
+  #' \describe{
+  #'   \item{method}{Character string specifying the estimation method
+  #'     (e.g., \code{"REML"}, \code{"ML"}, \code{"FE"}).}
+  #'   \item{test}{Character string specifying the test statistic
+  #'     (e.g., \code{"knha"}, \code{"z"}, \code{"t"}).}
+  #'   \item{control}{Optional list of control parameters passed to
+  #'     \code{metafor::rma()} (e.g., \code{list(maxiter = 10000)}).}
+  #' }
+  #' Restart attempts are evaluated sequentially, and the first successful
+  #' model fit is returned. Exactly one of \code{type} or \code{restart_plan}
+  #' must be specified.
+  #'
+  #' @return A data frame containing the meta-analysis results, including
+  #' effect size estimates, standard errors, and additional information about
+  #' the optimization process.
   #'
   #' @examples
   #' # Example data
@@ -835,14 +864,49 @@ rma_with_restart <- function(data, type = "RE", yi_col = "log_fc",
   #'   p.value = c(0.967, 0.515, 0.870)
   #' )
   #' # Example usage:
-  #' result <- rma_with_restart(data, type = "RE", yi_col = "log_fc", sei_col = "lfcse", slab = "race_eth")
+  #' result <- rma_with_restart(
+  #'   data, type = "RE", yi_col = "log_fc", sei_col = "lfcse",
+  #' )
+  #' result$reoptimize
+  #'
+  #' # Custom restart plan
+  #' custom_restart_plan <- list(
+  #'   list(method = "REML", test = "knha"),
+  #'   list(
+  #'     method = "REML",
+  #'     test = "knha",
+  #'     control = list(maxiter = 20000, stepadj = 0.5)
+  #'   ),
+  #'   list(method = "FE", test = "z")
+  #' )
+  #'
+  #' result <- rma_with_restart(
+  #'  data, type = "RE", yi_col = "log_fc", sei_col = "lfcse",
+  #'  restart_plan = custom_restart_plan
+  #' )
   #' result$reoptimize
   #'
   #' @references
-  #' Viechtbauer, W. (2010). Conducting meta-analyses in R with the metafor package.
-  #'   Journal of Statistical Software, 36(3), 1-48.
+  #' Viechtbauer, W. (2010). Conducting meta-analyses in R with the metafor
+  #' package. Journal of Statistical Software, 36(3), 1-48.
   #'
   #' @export
+
+  # Check arguments
+  if (!is.null(type) && !is.null(restart_plan)) {
+    stop("Arguments 'type' and 'restart_plan' are mutually exclusive. ",
+         "Specify only one.")
+  }
+  if (is.null(type) && is.null(restart_plan)) {
+    stop("You must specify either 'type' (to use a preset restart plan) ",
+         "or 'restart_plan' (to provide a custom plan).")
+  }
+
+  # Helper functions to enforce all arguments are set per plan
+  normalize_spec <- function(spec) {
+    defaults <- list(method = NULL, test = NULL, control = NULL)
+    modifyList(defaults, spec)
+  }
 
   # Define helper function to optimize model
   optimize_model <- function(method, test, control = NULL, slab = slab) {
@@ -859,12 +923,13 @@ rma_with_restart <- function(data, type = "RE", yi_col = "log_fc",
     args <- args[!sapply(args, is.null)]
 
     # Use do.call to invoke the function
-    res <- do.call(metafor::rma, args)
+    res <- try(do.call(metafor::rma, args), silent = T)
 
     if (!inherits(res, "try-error")) {
       res$reoptimize <- paste(tolower(method), test, sep = "_")
     } else {
-      message(paste("Error in optimization for method:", method, "and test:", test))
+      message(paste("Error in optimization for method:", method, "and test:",
+                    test))
       res <- NULL
     }
 
@@ -877,24 +942,45 @@ rma_with_restart <- function(data, type = "RE", yi_col = "log_fc",
   }
 
   # Define optimization settings based on the type
-  if (type == "RE") {
-    methods <- c("REML", "REML", "ML", "FE")
-    tests <- c("knha", "knha", "knha", "t")
-    controls <- list(NULL, list(maxiter = 10000, stepadj = 0.5), NULL, NULL)
-  } else if (type == "REHSK") {
-    methods <- c("HSk", "HS", "HE", "SJ")
-    tests <- c("knha", "knha", "knha", "knha")
-    controls <- rep(list(NULL), 4)
-  } else if (type == "FE") {
-    methods <- c("FE", "FE", "FE")
-    tests <- c("t", "t", "z")
-    controls <- list(NULL, list(maxiter = 10000, stepadj = 0.5), NULL)
+  preset_restart_plans <- list(
+    RE = list(
+      list(method = "REML", test = "knha"),
+      list(method = "REML", test = "knha",
+           control = list(maxiter = 10000, stepadj = 0.5)),
+      list(method = "ML", test = "knha"),
+      list(method = "FE", test = "t")
+    ),
+    REHSK = list(
+      list(method = "HSk", test = "knha"),
+      list(method = "HS", test = "knha"),
+      list(method = "HE", test = "knha"),
+      list(method = "SJ", test = "knha")
+    ),
+    FE = list(
+      list(method = "FE", test = "t"),
+      list(method = "FE", test = "t",
+           control = list(maxiter = 10000, stepadj = 0.5)),
+      list(method = "FE", test = "z")
+    )
+  )
+  preset_restart_plans <- lapply(
+    preset_restart_plans,
+    function(restart_plan) lapply(restart_plan, normalize_spec)
+  )
+
+  # Select from present plan if not specified
+  if (is.null(restart_plan)) {
+    if (!type %in% names(preset_restart_plans)) {
+      stop("Unknown type: ", type)
+    }
+    restart_plan <- preset_restart_plans[[type]]
   }
 
   # Iterate over methods and tests to find the first successful optimization
-  for (i in seq_along(methods)) {
-    current_result <- optimize_model(methods[i], tests[i], controls[[i]],
-                                     slab = slab)
+  current_result <- NULL
+  for (restart_plan_args in restart_plan) {
+    current_result <- do.call(optimize_model,
+                              modifyList(restart_plan_args, list(slab = slab)))
     if (!is.null(current_result)) break
   }
 
@@ -903,25 +989,52 @@ rma_with_restart <- function(data, type = "RE", yi_col = "log_fc",
 
 rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
                                  yi_col = NULL, sei_col = NULL,
-                                 type = "RE") {
+                                 type = NULL, restart_plan = NULL) {
   #' Perform Meta-Analysis with Diagnostics
   #'
   #' Conducts a meta-analysis using the rma_with_restart function and provides various diagnostics, including leave-one-out results, outlier detection,
   #' and residuals.
   #'
   #' @param data A data frame containing the relevant variables for the meta-analysis.
+  #'
   #' @param key A character string specifying the key variable in the data.
-  #' @param study_col A character string specifying the column name in data containing
-  #'   the study identifiers.
+  #'
+  #' @param study_col A character string specifying the column name in data
+  #' containing the study identifiers.
+  #'
   #' @param yi_col A character string specifying the column name in data containing
   #'   the effect sizes (yi) for the meta-analysis.
-  #' @param sei_col A character string specifying the column name in data containing
-  #'   the standard errors of the effect sizes (sei) for the meta-analysis.
-  #' @param type A character string specifying the type of meta-analysis.
-  #'   Options include "RE" for random effects, "REHSK" for random effects with Hedges' g, and "FE" for fixed effects. Default is "RE".
   #'
-  #' @return A data frame containing the meta-analysis results, including effect size estimates,
-  #'   standard errors, and additional information about the optimization process.
+  #' @param sei_col A character string specifying the column name in data
+  #' containing the standard errors of the effect sizes (sei) for the
+  #' meta-analysis.
+  #'
+  #' @param type Character string selecting a preset restart plan.
+  #' Must be one of \code{"RE"}, \code{"REHSK"}, or \code{"FE"}. Exactly one
+  #' of \code{type} or \code{restart_plan} must be specified. Defaults to
+  #' \code{NULL}.
+  #'
+  #' @param restart_plan Optional list defining a custom restart strategy for
+  #' model fitting. If \code{NULL} (default), a preset restart plan is
+  #' selected based on \code{type}. A restart plan must be a list of named
+  #' lists, where each inner list specifies arguments passed to
+  #' \code{metafor::rma()} and represents one optimization attempt. Each
+  #' attempt may include:
+  #' \describe{
+  #'   \item{method}{Character string specifying the estimation method
+  #'     (e.g., \code{"REML"}, \code{"ML"}, \code{"FE"}).}
+  #'   \item{test}{Character string specifying the test statistic
+  #'     (e.g., \code{"knha"}, \code{"z"}, \code{"t"}).}
+  #'   \item{control}{Optional list of control parameters passed to
+  #'     \code{metafor::rma()} (e.g., \code{list(maxiter = 10000)}).}
+  #' }
+  #' Restart attempts are evaluated sequentially, and the first successful
+  #' model fit is returned. Exactly one of \code{type} or \code{restart_plan}
+  #' must be specified.
+  #'
+  #' @return A data frame containing the meta-analysis results, including
+  #' effect size estimates, standard errors, and additional information about
+  #' the optimization process.
   #'
   #' @examples
   #' # Example usage:
@@ -941,20 +1054,23 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
   #'     conf.high = c(0.767, 0.313, 0.598)
   #'   ))
   #' )
-  #' result <- rma_with_diagnostics(data, key = "yis_and_seis",
-  #'  study_col = "race_eth", yi_col = "estimate", sei_col = "std.error")
+  #' result <- rma_with_diagnostics(
+  #'   data, key = "yis_and_seis", study_col = "race_eth", yi_col = "estimate",
+  #'   sei_col = "std.error", type = "RE"
+  #' )
   #' print(result)
   #'
   #' @references
-  #' Viechtbauer, W. (2010). Conducting meta-analyses in R with the metafor package.
-  #'   Journal of Statistical Software, 36(3), 1-48.
+  #' Viechtbauer, W. (2010). Conducting meta-analyses in R with the metafor
+  #' package. Journal of Statistical Software, 36(3), 1-48.
   #'
   #' @export
 
   if (!key %in% colnames(data)) stop("Column key must exist in the data.")
   key_col_names <- colnames(data[[key]][[1]])
   if (any(!c(study_col, yi_col, sei_col) %in% key_col_names)) {
-    stop("Columns study_col, yi_col, and sei_col must exist in the key list column.")
+    stop("Columns study_col, yi_col, and sei_col must exist in the key list ",
+         "column.")
   }
 
   # Run meta-analysis safely
@@ -972,7 +1088,8 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
       # Run meta-analysis safely
       rma_result = purrr::map(
         !!rlang::sym(key),
-        ~ safe_rma(.x, type, yi_col, sei_col, .x[[study_col]])
+        ~safe_rma(data = .x, type = type, yi_col = yi_col, sei_col = sei_col,
+                  slab = .x[[study_col]], restart_plan = restart_plan)
       ),
       # Extract error
       error = purrr::map_chr(
