@@ -1020,7 +1020,7 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
 
   # Get diagnostics
   tictoc::tic("Running leave one out")
-  res %>%
+  res %<>%
     dplyr::mutate(
       purrr::map_dfr(
         rma,
@@ -1029,6 +1029,9 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
             metafor::leave1out(.x) %>%
               as.data.frame() %>%
               tibble::rownames_to_column(study_col) %>%
+              dplyr::mutate(!!study_col := stringr::str_remove(
+                !!rlang::sym(study_col), "^\\-"
+              )) %>%
               tidyr::pivot_wider(
                 names_from = !!rlang::sym(study_col),
                 values_from = -!!rlang::sym(study_col),
