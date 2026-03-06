@@ -3110,10 +3110,13 @@ dynamic_facet_breaks <- function(limits, n = 2) {
   return(breaks)
 }
 
-my_qsave <- function(...) qs::qsave(...,
-                                    nthreads = parallelly::availableCores())
-my_qread <- function(...) qs::qread(...,
-                                    nthreads = parallelly::availableCores())
+my_qsave <- function(..., nthreads = parallelly::availableCores()) {
+  qs2::qs_save(..., nthreads = nthreads)
+}
+
+my_qread <- function(..., nthreads = parallelly::availableCores()) {
+  qs2::qs_read(..., nthreads = nthreads)
+}
 
 get_response <- robustglm::get_response
 
