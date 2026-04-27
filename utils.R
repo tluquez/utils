@@ -228,7 +228,7 @@ get_h5ad_meta <- function(h5ad, FactorsAsStrings = T) {
     } else {
       # Handle Scanpy's format
       valid_names <- c("categories", "codes", "mask", "values")
-      for (i in which(purrr::map_int(obs, purrr::vec_depth) == 3)) {
+      for (i in which(purrr::map_int(obs, purrr::pluck_depth) == 3)) {
           if (!sum(names(obs[[i]]) %in% valid_names) == 2) {
               .y <- paste0(names(obs[i]), "/", names(obs[[i]]))
               obs[i] <- unlist(obs[i], F, F)
@@ -568,7 +568,7 @@ h5ad_de <- function(fs = fs, replicate_col = "projid", replicate_col_ids = NULL,
         })
 
         # Make sure no extra level of list was created
-        if (purrr::vec_depth(cts) > 4) {
+        if (purrr::pluck_depth(cts) > 4) {
           cts <- purrr::flatten(cts)
         }
 
