@@ -989,7 +989,8 @@ rma_with_restart <- function(data, type = NULL, yi_col = "log_fc",
 
 rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
                                  yi_col = NULL, sei_col = NULL,
-                                 type = NULL, restart_plan = NULL) {
+                                 type = NULL, restart_plan = NULL,
+                                 diagnostics = "all") {
   #' Perform Meta-Analysis with Diagnostics
   #'
   #' Conducts a meta-analysis using the rma_with_restart function and provides various diagnostics, including leave-one-out results, outlier detection,
@@ -1032,6 +1033,13 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
   #' model fit is returned. Exactly one of \code{type} or \code{restart_plan}
   #' must be specified.
   #'
+  #' @param diagnostics Character vector specifying which diagnostics to run.
+  #' Options include \code{"leave1out"}, \code{"influence"}, and
+  #' \code{"residuals"}. Defaults to \code{"all"}, which runs all diagnostics
+  #' for backward compatibility. You can also provide a subset of diagnostics
+  #' to reduce computation time, or an empty character vector
+  #' (\code{character(0)}) to skip all diagnostics.
+  #'
   #' @return A data frame containing the meta-analysis results, including
   #' effect size estimates, standard errors, and additional information about
   #' the optimization process.
@@ -1060,6 +1068,34 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
   #' )
   #' print(result)
   #'
+  #' # Run all diagnostics (default behavior)
+  #' result_all <- rma_with_diagnostics(
+  #'   data, key = "yis_and_seis", study_col = "race_eth",
+  #'   yi_col = "estimate", sei_col = "std.error",
+  #'   type = "RE"
+  #' )
+  #'
+  #' # Run only leave-one-out diagnostics
+  #' result_l1o <- rma_with_diagnostics(
+  #'   data, key = "yis_and_seis", study_col = "race_eth",
+  #'   yi_col = "estimate", sei_col = "std.error",
+  #'   type = "RE", diagnostics = "leave1out"
+  #' )
+  #'
+  #' # Run multiple selected diagnostics
+  #' result_subset <- rma_with_diagnostics(
+  #'   data, key = "yis_and_seis", study_col = "race_eth",
+  #'   yi_col = "estimate", sei_col = "std.error",
+  #'   type = "RE", diagnostics = c("leave1out", "residuals")
+  #' )
+  #'
+  #' # Skip all diagnostics (faster execution)
+  #' result_fast <- rma_with_diagnostics(
+  #'   data, key = "yis_and_seis", study_col = "race_eth",
+  #'   yi_col = "estimate", sei_col = "std.error",
+  #'   type = "RE", diagnostics = character(0)
+  #' )
+  #'
   #' @references
   #' Viechtbauer, W. (2010). Conducting meta-analyses in R with the metafor
   #' package. Journal of Statistical Software, 36(3), 1-48.
@@ -1071,6 +1107,16 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
   if (any(!c(study_col, yi_col, sei_col) %in% key_col_names)) {
     stop("Columns study_col, yi_col, and sei_col must exist in the key list ",
          "column.")
+  }
+
+  valid_diagnostics <- c("leave1out", "influence", "residuals")
+  if (identical(diagnostics, "all")) {
+    diagnostics <- valid_diagnostics
+  } else {
+    if (!all(diagnostics %in% valid_diagnostics)) {
+      stop("Invalid diagnostics specified. Must be one of: ",
+           paste(valid_diagnostics, collapse = ", "), " or 'all'")
+    }
   }
 
   # Run meta-analysis safely
@@ -1136,107 +1182,114 @@ rma_with_diagnostics <- function(data, key = NULL, study_col = NULL,
   tictoc::toc()
 
   # Get diagnostics
-  tictoc::tic("Running leave one out")
-  res %<>%
-    dplyr::mutate(
-      purrr::map_dfr(
-        rma,
-        ~ tryCatch(
-          {
-            metafor::leave1out(.x) %>%
-              as.data.frame() %>%
-              tibble::rownames_to_column(study_col) %>%
-              dplyr::mutate(!!study_col := stringr::str_remove(
-                !!rlang::sym(study_col), "^\\-"
-              )) %>%
-              tidyr::pivot_wider(
-                names_from = !!rlang::sym(study_col),
-                values_from = -!!rlang::sym(study_col),
-                names_glue = paste0("l1o_{", study_col, "}_{.value}")
-              ) %>%
-              dplyr::rowwise() %>%
-              dplyr::mutate(
-                l1o_mean = mean(
-                  dplyr::c_across(dplyr::ends_with("_estimate")),
-                  na.rm = T
-                ),
-                l1o_median = median(
-                  dplyr::c_across(dplyr::ends_with("_estimate")),
-                  na.rm = T
-                ),
-                l1o_std = sd(
-                  dplyr::c_across(dplyr::ends_with("_estimate")),
-                  na.rm = T
-                ),
-                l1o_cv = l1o_std / l1o_mean
-              ) %>%
-              dplyr::ungroup()
-          },
-          error = function(e) {
-            message(e)
-            data.frame(error = e$message)
-          }
+  if ("leave1out" %in% diagnostics) {
+    tictoc::tic("Running leave one out")
+    res %<>%
+      dplyr::mutate(
+        purrr::map_dfr(
+          rma,
+          ~ tryCatch(
+            {
+              metafor::leave1out(.x) %>%
+                as.data.frame() %>%
+                tibble::rownames_to_column(study_col) %>%
+                dplyr::mutate(!!study_col := stringr::str_remove(
+                  !!rlang::sym(study_col), "^\\-"
+                )) %>%
+                tidyr::pivot_wider(
+                  names_from = !!rlang::sym(study_col),
+                  values_from = -!!rlang::sym(study_col),
+                  names_glue = paste0("l1o_{", study_col, "}_{.value}")
+                ) %>%
+                dplyr::rowwise() %>%
+                dplyr::mutate(
+                  l1o_mean = mean(
+                    dplyr::c_across(dplyr::ends_with("_estimate")),
+                    na.rm = T
+                  ),
+                  l1o_median = median(
+                    dplyr::c_across(dplyr::ends_with("_estimate")),
+                    na.rm = T
+                  ),
+                  l1o_std = sd(
+                    dplyr::c_across(dplyr::ends_with("_estimate")),
+                    na.rm = T
+                  ),
+                  l1o_cv = l1o_std / l1o_mean
+                ) %>%
+                dplyr::ungroup()
+            },
+            error = function(e) {
+              message(e)
+              data.frame(error = e$message)
+            }
+          )
         )
       )
-    )
-  tictoc::toc()
+    tictoc::toc()
+  }
 
-  tictoc::tic("Running outlier detection")
-  res %<>%
-    dplyr::mutate(
-      purrr::map_dfr(
-        rma,
-        ~ tryCatch(
-          {
-            stats::influence(.x) %>%
-              influence_to_df() %>%
-              dplyr::bind_cols("{study_col}" := .x$slab) %>%
-              tidyr::pivot_wider(
-                names_from = !!rlang::sym(study_col),
-                values_from = -!!rlang::sym(study_col),
-                names_glue = paste0("influence_{", study_col, "}_{.value}")
-              ) %>%
-              dplyr::rowwise() %>%
-              dplyr::mutate(
-                influence_n = sum(
-                  dplyr::c_across(dplyr::ends_with("_inf")),
-                  na.rm = T
+  if ("influence" %in% diagnostics) {
+    tictoc::tic("Running outlier detection")
+    res %<>%
+      dplyr::mutate(
+        purrr::map_dfr(
+          rma,
+          ~ tryCatch(
+            {
+              stats::influence(.x) %>%
+                influence_to_df() %>%
+                dplyr::bind_cols("{study_col}" := .x$slab) %>%
+                tidyr::pivot_wider(
+                  names_from = !!rlang::sym(study_col),
+                  values_from = -!!rlang::sym(study_col),
+                  names_glue = paste0("influence_{", study_col, "}_{.value}")
+                ) %>%
+                dplyr::rowwise() %>%
+                dplyr::mutate(
+                  influence_n = sum(
+                    dplyr::c_across(dplyr::ends_with("_inf")),
+                    na.rm = T
+                  )
+                ) %>%
+                dplyr::ungroup()
+            },
+            error = function(e) {
+              message(e)
+              data.frame()
+            }
+          )
+        )
+      )
+    tictoc::toc()
+  }
+
+  if ("residuals" %in% diagnostics) {
+    tictoc::tic("Getting residuals")
+    res %<>%
+      dplyr::mutate(
+        purrr::map_dfr(
+          rma,
+          ~ tryCatch(
+            {
+              data.frame(residuals = stats::residuals(.x)) %>%
+                dplyr::bind_cols("{study_col}" := .x$slab) %>%
+                tidyr::pivot_wider(
+                  names_from = !!rlang::sym(study_col),
+                  values_from = -!!rlang::sym(study_col),
+                  names_glue = paste0("residuals_{", study_col, "}_{.value}")
                 )
-              ) %>%
-              dplyr::ungroup()
-          },
-          error = function(e) {
-            message(e)
-            data.frame()
-          }
+            },
+            error = function(e) {
+              message(e)
+              data.frame()
+            }
+          )
         )
       )
-    )
-  tictoc::toc()
+    tictoc::toc()
+  }
 
-  tictoc::tic("Getting residuals")
-  res %<>%
-    dplyr::mutate(
-      purrr::map_dfr(
-        rma,
-        ~ tryCatch(
-          {
-            data.frame(residuals = stats::residuals(.x)) %>%
-              dplyr::bind_cols("{study_col}" := .x$slab) %>%
-              tidyr::pivot_wider(
-                names_from = !!rlang::sym(study_col),
-                values_from = -!!rlang::sym(study_col),
-                names_glue = paste0("residuals_{", study_col, "}_{.value}")
-              )
-          },
-          error = function(e) {
-            message(e)
-            data.frame()
-          }
-        )
-      )
-    )
-  tictoc::toc()
   tictoc::toc()
 
   # Return all conditions
